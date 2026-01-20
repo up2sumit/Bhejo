@@ -64,6 +64,29 @@
 }
 
 /* =========================
+   IMPORTANT: Native select dropdown fix
+   ========================= */
+
+/* Tell browser native controls to follow theme */
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+/* Try to force dropdown menu colors (works in many browsers) */
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] option,
+:root[data-theme="dark"] optgroup {
+  background-color: #0f172a;
+  color: #e7eefc;
+}
+
+:root[data-theme="light"] select,
+:root[data-theme="light"] option,
+:root[data-theme="light"] optgroup {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+/* =========================
    GLOBAL
    ========================= */
 
@@ -176,9 +199,10 @@ a { color: inherit; }
 
 /* History scroll only */
 .sidebarBody{
-  max-height: calc(100vh - 140px);
-  overflow: auto;
+  height: calc(100vh - 140px); /* keep panel height */
+  overflow: hidden;           /* NO scroll */
 }
+
 .mainStack{ min-width: 0; }
 
 /* =========================
@@ -283,6 +307,7 @@ a { color: inherit; }
 }
 
 .smallMuted{ color: var(--muted); font-size: 12px; }
+.smallMuted span{ word-break: break-all; }
 
 /* =========================
    LIST (History)
@@ -352,6 +377,207 @@ a { color: inherit; }
   background: linear-gradient(180deg, var(--accent), var(--accent2));
   box-shadow: 0 0 0 4px rgba(255,106,61,0.10);
 }
-.smallMuted span{
-  word-break: break-all;
+
+/* =========================
+   TABS
+   ========================= */
+
+.tabs{
+  display:flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tabsBetween{
+  justify-content: space-between;
+  align-items: center;
+}
+
+.tab{
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: var(--inputBg);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tab:hover{
+  filter: brightness(1.05);
+}
+
+.tabActive{
+  color: var(--text);
+  border-color: rgba(255,106,61,0.50);
+  box-shadow: 0 0 0 4px rgba(255,106,61,0.10);
+  background: linear-gradient(180deg, rgba(255,106,61,0.22), rgba(255,61,90,0.10));
+}
+
+/* =========================
+   HISTORY ITEM ACTIONS
+   ========================= */
+
+
+
+.listItemMain:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+
+
+
+
+.iconBtn:hover{
+  filter: brightness(1.06);
+}
+
+/* =========================
+   HISTORY (no overlap)
+   ========================= */
+
+.sidebarBody{
+  height: calc(100vh - 140px);  /* fixed panel height */
+  overflow-y: auto;             /* scroll only if needed */
+  overflow-x: hidden;           /* prevent horizontal scroll */
+}
+
+/* Each history row becomes grid: content + actions */
+.listRow{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+
+  padding: 10px;
+  border-radius: var(--radius2);
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+}
+
+.listRow:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+.listRowMain{
+  min-width: 0; /* important for text wrapping */
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.listRowUrl{
+  color: var(--muted);
+  font-weight: 500;
+  word-break: break-word; /* long URLs wrap */
+}
+
+.listRowMeta{
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+}
+
+/* Right side actions are stacked, no overlap */
+.listRowActions{
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.iconBtn{
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--border2);
+  background: var(--inputBg);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconBtn:hover{
+  filter: brightness(1.06);
+}
+
+.iconBtnDanger{
+  border-color: rgba(255,61,90,0.45);
+  background: rgba(255,61,90,0.12);
+}
+
+.panelHeaderStack{
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.testRow{
+  display:grid;
+  grid-template-columns: 180px 1fr 220px 44px;
+  gap: 8px;
+  margin-top: 10px;
+}
+.codeBlock{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  max-height: 420px;
+  overflow: auto;
+  box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+}
+.runnerRow{
+  display:flex;
+  gap: 10px;
+  align-items:flex-start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.runnerRowMain{
+  display:flex;
+  flex-direction:column;
+  gap: 4px;
+  flex: 1;
+}
+
+.runnerTableWrap{
+  margin-top: 10px;
+  overflow:auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.runnerTable{
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.runnerTable th,
+.runnerTable td{
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align:left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.runnerTable thead th{
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
 }

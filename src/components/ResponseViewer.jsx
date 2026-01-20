@@ -1,63 +1,178 @@
-function prettyJson(obj) {
+import { useMemo, useState } from "react";
+
+function prettyJson(value) {
   try {
-    return JSON.stringify(obj, null, 2);
+    return JSON.stringify(value, null, 2);
   } catch {
-    return String(obj);
+    return null;
   }
 }
 
 export default function ResponseViewer({ response }) {
-  if (!response) return <div className="smallMuted">No response yet.</div>;
+  const [showHeaders, setShowHeaders] = useState(false);
 
-  if (!response.ok) {
+  const statusBadgeClass = useMemo(() => {
+    if (!response) return "badge";
+    if (response.ok === false) return "badge badgeErr";
+    if (typeof response.status === "number" && response.status >= 200 && response.status < 300)
+      return "badge badgeOk";
+    return "badge badgeErr";
+  }, [response]);
+
+  const headerEntries = useMemo(() => {
+    const h = response?.headers || {};
+    return Object.entries(h);
+  }, [response]);
+
+  const bodyText = useMemo(() => {
+    if (!response) return "";
+    if (response.ok === false) return "";
+
+    // Prefer parsed JSON if available
+    if (response.json !== null && response.json !== undefined) {
+      const pretty = prettyJson(response.json);
+      if (pretty) return pretty;
+    }
+
+    return response.rawText || "";
+  }, [response]);
+
+  if (!response) {
+    return <div className="smallMuted">No response yet. Send a request.</div>;
+  }
+
+  if (response.ok === false) {
     return (
-      <div className="stack">
-        <span className="badge badgeErr">Error</span>
-        <div className="monoBox">
-          {`Name: ${response.errorName}\nMessage: ${response.errorMessage}\nTime: ${response.timeMs} ms`}
-        </div>
-        <div className="smallMuted">
-          If this is a CORS issue, we’ll add a proxy soon.
+      <div className="stack" style={{ gap: 12 }}>
+        <div className="card" style={{ padding: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div style={{ fontWeight: 800 }}>Error</div>
+            <span className="badge badgeErr">{response.errorName || "Error"}</span>
+          </div>
+
+          <div className="smallMuted" style={{ marginTop: 10 }}>
+            {response.errorMessage || "Request failed"}
+          </div>
+
+          {typeof response.timeMs === "number" ? (
+            <div className="smallMuted" style={{ marginTop: 8 }}>
+              Time: <span style={{ fontFamily: "var(--mono)" }}>{response.timeMs} ms</span>
+            </div>
+          ) : null}
         </div>
       </div>
     );
   }
 
-  const ok = response.status >= 200 && response.status < 300;
-  const badgeClass = ok ? "badge badgeOk" : "badge badgeErr";
-
-  const bodyText =
-    response.json !== null ? prettyJson(response.json) : response.rawText || "";
-
-  const MAX_CHARS = 200000;
-  const limited =
-    bodyText.length > MAX_CHARS
-      ? bodyText.slice(0, MAX_CHARS) + "\n\n...truncated"
-      : bodyText;
-
   return (
-    <div className="stack">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className={badgeClass}>
-          {response.status} {response.statusText}
-        </span>
-        <span className="badge">{response.timeMs} ms</span>
+    <div className="stack" style={{ gap: 12 }}>
+      {/* Summary */}
+      <div className="card" style={{ padding: 12 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 800 }}>Response</div>
+          <div className="row" style={{ gap: 8 }}>
+            <span className={statusBadgeClass}>
+              {response.status} {response.statusText || ""}
+            </span>
+            <span className="badge">{response.timeMs} ms</span>
+          </div>
+        </div>
+
+        {/* Tests report (Phase 1.9) */}
+        {response?.testReport && response.testReport.total > 0 ? (
+          <div style={{ marginTop: 12 }}>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 800 }}>Tests</div>
+              <span className="badge">
+                {response.testReport.passed}/{response.testReport.total} passed
+              </span>
+            </div>
+
+            <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+              {response.testReport.results.map((r, i) => (
+                <div
+                  key={i}
+                  className="row"
+                  style={{
+                    justifyContent: "space-between",
+                    gap: 10,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <div className="smallMuted" style={{ flex: 1 }}>
+                    {r.message}
+                  </div>
+                  <span className={`badge ${r.pass ? "badgeOk" : "badgeErr"}`}>
+                    {r.pass ? "PASS" : "FAIL"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      <details className="card" style={{ padding: 12 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 800, fontSize: 13 }}>
-          Headers
-        </summary>
-        <div className="monoBox" style={{ marginTop: 10 }}>
-          {prettyJson(response.headers)}
-        </div>
-      </details>
-
+      {/* Headers */}
       <div className="card" style={{ padding: 12 }}>
-        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>
-          Body
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 800 }}>Headers</div>
+          <button className="btn btnSm" onClick={() => setShowHeaders((s) => !s)}>
+            {showHeaders ? "Hide" : "Show"} ({headerEntries.length})
+          </button>
         </div>
-        <div className="monoBox">{limited}</div>
+
+        {showHeaders ? (
+          <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+            {headerEntries.length === 0 ? (
+              <div className="smallMuted">No headers.</div>
+            ) : (
+              headerEntries.map(([k, v]) => (
+                <div
+                  key={k}
+                  className="row"
+                  style={{ justifyContent: "space-between", gap: 10 }}
+                >
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{k}</div>
+                  <div
+                    className="smallMuted"
+                    style={{
+                      textAlign: "right",
+                      overflowWrap: "anywhere",
+                      flex: 1,
+                    }}
+                  >
+                    {String(v)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="smallMuted" style={{ marginTop: 8 }}>
+            Click “Show” to view headers.
+          </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="card" style={{ padding: 12 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 800 }}>Body</div>
+          <span className="badge">
+            {response.json !== null && response.json !== undefined ? "JSON" : "Text"}
+          </span>
+        </div>
+
+        <pre
+          className="codeBlock"
+          style={{
+            marginTop: 10,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {bodyText || "(empty body)"}
+        </pre>
       </div>
     </div>
   );

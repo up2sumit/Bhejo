@@ -1,48 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 
-function statusBadgeClass(status) {
-  if (status === "ERR") return "badge badgeErr";
-  if (typeof status === "number" && status >= 200 && status < 300) return "badge badgeOk";
-  return "badge badgeErr";
-}
-
-export default function HistoryPanel({ history, onSelect, onClone, onDelete }) {
+export default function SavedPanel({ saved, onLoad, onDelete }) {
   const PAGE_SIZE = 10;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // Reset visible count when history changes (e.g., new request added / clear)
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [history?.length]);
+  }, [saved?.length]);
 
-  const visible = useMemo(() => history.slice(0, visibleCount), [history, visibleCount]);
-  const canLoadMore = history.length > visibleCount;
+  const visible = useMemo(() => saved.slice(0, visibleCount), [saved, visibleCount]);
+  const canLoadMore = saved.length > visibleCount;
 
-  if (!history?.length) return <div className="smallMuted">No history yet.</div>;
+  if (!saved?.length) return <div className="smallMuted">No saved requests yet.</div>;
 
   return (
     <div className="stack" style={{ gap: 10 }}>
       <div className="list">
         {visible.map((item) => (
           <div key={item.id} className="listRow">
-            <button className="listRowMain" onClick={() => onSelect(item)}>
+            <button className="listRowMain" onClick={() => onLoad(item)}>
               <div style={{ fontWeight: 800 }}>
-                {item.method}{" "}
-                <span className="listRowUrl">{item.url}</span>
+                {item.name}{" "}
+                <span className="badge" style={{ marginLeft: 8 }}>
+                  {item.method}
+                </span>
               </div>
 
               <div className="listRowMeta">
-                {item.lastResult ? (
-                  <>
-                    <span className={statusBadgeClass(item.lastResult.status)}>
-                      {item.lastResult.status}
-                    </span>
-                    <span className="badge">{item.lastResult.timeMs} ms</span>
-                  </>
-                ) : null}
-
+                <span className="listRowUrl">{item.url}</span>
                 <span className="smallMuted">
-                  {new Date(item.savedAt).toLocaleString()}
+                  Updated: {new Date(item.updatedAt || item.createdAt).toLocaleString()}
                 </span>
               </div>
             </button>
@@ -50,15 +37,15 @@ export default function HistoryPanel({ history, onSelect, onClone, onDelete }) {
             <div className="listRowActions">
               <button
                 className="iconBtn"
-                title="Clone into editor"
-                aria-label="Clone"
+                title="Load into editor"
+                aria-label="Load"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onClone(item);
+                  onLoad(item);
                 }}
               >
-                ⎘
+                ▶
               </button>
 
               <button
@@ -80,7 +67,7 @@ export default function HistoryPanel({ history, onSelect, onClone, onDelete }) {
 
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div className="smallMuted">
-          Showing {Math.min(visibleCount, history.length)} of {history.length}
+          Showing {Math.min(visibleCount, saved.length)} of {saved.length}
         </div>
 
         {canLoadMore ? (
