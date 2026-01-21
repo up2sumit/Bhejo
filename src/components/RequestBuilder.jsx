@@ -4,21 +4,23 @@ import BodyEditor from "./BodyEditor";
 import QueryParamsEditor from "./QueryParamsEditor";
 import AuthEditor, { applyAuthToHeaders } from "./AuthEditor";
 import TestsEditor from "./TestsEditor";
+import DataEditor from "./DataEditor";
 
 import { applyVarsToRequest } from "../utils/vars";
 import { runAssertions } from "../utils/assertions";
+import { pushConsoleEvent } from "../utils/consoleBus";
 
-function uuid() {
+function uuid(prefix = "id") {
   return (
     globalThis.crypto?.randomUUID?.() ||
-    `id_${Date.now()}_${Math.random().toString(16).slice(2)}`
+    `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
   );
 }
 
 function buildFinalUrl(baseUrl, params) {
   try {
     const urlObj = new URL(baseUrl);
-    for (const p of params) {
+    for (const p of params || []) {
       const k = (p.key || "").trim();
       if (!k) continue;
       urlObj.searchParams.set(k, p.value ?? "");
@@ -32,8 +34,7 @@ function buildFinalUrl(baseUrl, params) {
 function suggestName(method, url) {
   try {
     const u = new URL(url);
-    const path =
-      u.pathname?.split("/").filter(Boolean).slice(0, 2).join("/") || "request";
+    const path = u.pathname?.split("/").filter(Boolean).slice(0, 2).join("/") || "request";
     return `${method} ${u.hostname}/${path}`;
   } catch {
     return `${method} request`;
@@ -53,6 +54,7 @@ export default function RequestBuilder({
 
   const [params, setParams] = useState(initial?.params || [{ key: "", value: "" }]);
   const [headers, setHeaders] = useState(initial?.headers || [{ key: "", value: "" }]);
+
   const [body, setBody] = useState(initial?.body || "");
   const [bodyError, setBodyError] = useState("");
 
@@ -67,20 +69,16 @@ export default function RequestBuilder({
     }
   );
 
-  // Tests (Phase 1.9)
   const [tests, setTests] = useState(initial?.tests || []);
+  const [dataRows, setDataRows] = useState(initial?.dataRows || []);
 
-  // Request name (always visible)
   const [requestName, setRequestName] = useState("");
   const [saveError, setSaveError] = useState("");
 
   const [loading, setLoading] = useState(false);
   const controllerRef = useRef(null);
 
-  // Tabs
-  const [tab, setTab] = useState("params"); // params | auth | headers | body | tests
-
-  // Send mode
+  const [tab, setTab] = useState("params"); // params | auth | headers | body | tests | data
   const [mode, setMode] = useState("direct"); // direct | proxy
 
   useEffect(() => {
@@ -101,46 +99,33 @@ export default function RequestBuilder({
         apiKeyValue: "",
       }
     );
-    setTests(initial.tests || []);
+    setTests(Array.isArray(initial.tests) ? initial.tests : []);
+    setDataRows(Array.isArray(initial.dataRows) ? initial.dataRows : []);
+
+    setBodyError("");
+    setSaveError("");
 
     const loadedName = (initial?.name || "").trim();
     setRequestName(loadedName);
-    setSaveError("");
 
-    setBodyError("");
     setTab("params");
-    onResponse(null);
+    onResponse?.(null);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial?.savedAt]);
 
-  // Auto-suggest a name if empty
   useEffect(() => {
     if (requestName.trim()) return;
-    // Replace any {{var}} to make suggestion stable
     const safeUrl = (url || "").replace(/\{\{\s*.*?\s*\}\}/g, "var");
     setRequestName(suggestName(method, safeUrl));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [method, url]);
 
-  // Apply environment variables to request for runtime execution
   const finalDraft = useMemo(() => {
-    return applyVarsToRequest(
-      {
-        method,
-        url,
-        params,
-        headers,
-        body,
-        auth,
-      },
-      envVars
-    );
+    return applyVarsToRequest({ method, url, params, headers, body, auth }, envVars);
   }, [method, url, params, headers, body, auth, envVars]);
 
-  const finalUrlPreview = useMemo(() => {
-    return buildFinalUrl(finalDraft.url, finalDraft.params);
-  }, [finalDraft]);
+  const finalUrlPreview = useMemo(() => buildFinalUrl(finalDraft.url, finalDraft.params), [finalDraft]);
 
   const envBadge = useMemo(() => {
     const v = envVars || {};
@@ -151,19 +136,15 @@ export default function RequestBuilder({
   const validate = () => {
     const urlAfterVars = (finalDraft.url || "").trim();
     if (!urlAfterVars) {
-      onResponse?.({
-        ok: false,
-        timeMs: 0,
-        errorName: "ValidationError",
-        errorMessage: "URL is required",
-      });
+      onResponse?.({ ok: false, timeMs: 0, errorName: "ValidationError", errorMessage: "URL is required" });
       return false;
     }
 
     if (!["GET", "HEAD"].includes(method)) {
-      if ((finalDraft.body || "").trim().length > 0) {
+      const b = (finalDraft.body || "").trim();
+      if (b.length > 0) {
         try {
-          JSON.parse(finalDraft.body);
+          JSON.parse(b);
           setBodyError("");
         } catch {
           setBodyError("Invalid JSON body");
@@ -177,19 +158,20 @@ export default function RequestBuilder({
         }
       }
     }
-
     return true;
   };
 
   const buildHeadersObject = (hdrs) => {
     const obj = {};
-    for (const h of hdrs) {
+    for (const h of hdrs || []) {
       const k = (h.key || "").trim();
       if (!k) continue;
       obj[k] = h.value ?? "";
     }
     return obj;
   };
+
+  const cancelRequest = () => controllerRef.current?.abort();
 
   const sendRequest = async () => {
     if (!validate()) return;
@@ -198,6 +180,7 @@ export default function RequestBuilder({
     const controller = new AbortController();
     controllerRef.current = controller;
 
+    const traceId = uuid("trace"); // ✅ NEW
     const start = performance.now();
     setLoading(true);
 
@@ -207,25 +190,35 @@ export default function RequestBuilder({
       let headerObj = buildHeadersObject(finalDraft.headers);
       headerObj = applyAuthToHeaders(finalDraft.auth, headerObj);
 
+      // ✅ Console: request (with traceId)
+      pushConsoleEvent({
+        level: "info",
+        type: "request",
+        data: {
+          traceId,
+          source: "requestBuilder",
+          name: (requestName || "").trim(),
+          mode,
+          method,
+          finalUrl,
+          headers: headerObj,
+          body: !["GET", "HEAD"].includes(method) ? (finalDraft.body || "") : "",
+        },
+      });
+
       let resStatus, resStatusText, resHeaders, rawText;
 
       if (mode === "direct") {
-        const options = {
-          method,
-          headers: { ...headerObj },
-          signal: controller.signal,
-        };
+        const options = { method, headers: { ...headerObj }, signal: controller.signal };
 
-        if (
-          !["GET", "HEAD"].includes(method) &&
-          (finalDraft.body || "").trim().length > 0
-        ) {
-          options.body = finalDraft.body;
+        if (!["GET", "HEAD"].includes(method)) {
+          const b = (finalDraft.body || "").trim();
+          if (b.length > 0) {
+            options.body = finalDraft.body;
 
-          const hasContentType = Object.keys(options.headers).some(
-            (k) => k.toLowerCase() === "content-type"
-          );
-          if (!hasContentType) options.headers["Content-Type"] = "application/json";
+            const hasContentType = Object.keys(options.headers).some((k) => k.toLowerCase() === "content-type");
+            if (!hasContentType) options.headers["Content-Type"] = "application/json";
+          }
         }
 
         const res = await fetch(finalUrl, options);
@@ -238,7 +231,6 @@ export default function RequestBuilder({
 
         rawText = await res.text();
       } else {
-        // Proxy mode
         const proxyRes = await fetch("http://localhost:3001/proxy", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -270,7 +262,6 @@ export default function RequestBuilder({
         parsedJson = null;
       }
 
-      // Run assertions (Phase 1.9)
       const testReport = runAssertions({
         tests,
         response: { status: resStatus, timeMs, json: parsedJson },
@@ -287,7 +278,22 @@ export default function RequestBuilder({
         testReport,
       });
 
-      // Save to history using TEMPLATE values (keep {{vars}})
+      // ✅ Console: response (with traceId)
+      pushConsoleEvent({
+        level: "info",
+        type: "response",
+        data: {
+          traceId,
+          source: "requestBuilder",
+          name: (requestName || "").trim(),
+          status: resStatus,
+          timeMs,
+          headers: resHeaders,
+          body: rawText,
+          tests: { passed: testReport.passed, total: testReport.total },
+        },
+      });
+
       onSaveHistory?.({
         id: initial?.id || uuid(),
         name: (requestName || "").trim(),
@@ -298,23 +304,26 @@ export default function RequestBuilder({
         body,
         auth,
         tests,
+        dataRows,
         savedAt: new Date().toISOString(),
-        lastResult: {
-          status: resStatus,
-          timeMs,
-          passed: testReport.passed,
-          total: testReport.total,
-        },
+        lastResult: { status: resStatus, timeMs, passed: testReport.passed, total: testReport.total },
       });
     } catch (err) {
       const end = performance.now();
       const timeMs = Math.round(end - start);
 
-      onResponse?.({
-        ok: false,
-        timeMs,
-        errorName: err?.name || "Error",
-        errorMessage: err?.message || "Request failed",
+      onResponse?.({ ok: false, timeMs, errorName: err?.name || "Error", errorMessage: err?.message || "Request failed" });
+
+      // ✅ Console: error (with traceId)
+      pushConsoleEvent({
+        level: err?.name === "AbortError" ? "warn" : "error",
+        type: "error",
+        data: {
+          traceId,
+          source: "requestBuilder",
+          name: (requestName || "").trim(),
+          message: err?.name === "AbortError" ? "Aborted" : (err?.message || "Request failed"),
+        },
       });
 
       onSaveHistory?.({
@@ -327,21 +336,15 @@ export default function RequestBuilder({
         body,
         auth,
         tests,
+        dataRows,
         savedAt: new Date().toISOString(),
-        lastResult: {
-          status: "ERR",
-          timeMs,
-          passed: 0,
-          total: tests?.length || 0,
-        },
+        lastResult: { status: "ERR", timeMs, passed: 0, total: tests?.length || 0 },
       });
     } finally {
       setLoading(false);
       controllerRef.current = null;
     }
   };
-
-  const cancelRequest = () => controllerRef.current?.abort();
 
   const saveRequest = () => {
     if (!validate()) return;
@@ -353,8 +356,8 @@ export default function RequestBuilder({
     }
     setSaveError("");
 
-    // Save TEMPLATE values (keep {{vars}})
     onSaveRequest?.({
+      id: initial?.id,
       name,
       method,
       url,
@@ -363,12 +366,12 @@ export default function RequestBuilder({
       body,
       auth,
       tests,
+      dataRows,
     });
   };
 
   return (
     <div className="stack">
-      {/* Name row */}
       <div className="row">
         <input
           className="input"
@@ -385,14 +388,8 @@ export default function RequestBuilder({
         </div>
       ) : null}
 
-      {/* Request row */}
       <div className="row">
-        <select
-          className="select"
-          style={{ maxWidth: 120 }}
-          value={method}
-          onChange={(e) => setMethod(e.target.value)}
-        >
+        <select className="select" style={{ maxWidth: 120 }} value={method} onChange={(e) => setMethod(e.target.value)}>
           {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].map((m) => (
             <option key={m} value={m}>
               {m}
@@ -400,12 +397,7 @@ export default function RequestBuilder({
           ))}
         </select>
 
-        <input
-          className="input"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="{{baseUrl}}/api/books"
-        />
+        <input className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="{{baseUrl}}/api/books/{{id}}" />
 
         <button className="btn btnPrimary" onClick={sendRequest} disabled={loading}>
           {loading ? "Sending..." : "Send"}
@@ -420,80 +412,52 @@ export default function RequestBuilder({
         </button>
       </div>
 
-      {/* Final URL + Mode */}
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div className="smallMuted">
-          Final URL:{" "}
-          <span style={{ fontFamily: "var(--mono)" }}>{finalUrlPreview}</span>
+          Final URL: <span style={{ fontFamily: "var(--mono)" }}>{finalUrlPreview}</span>
         </div>
 
         <div className="tabs">
-          <button
-            className={`tab ${mode === "proxy" ? "tabActive" : ""}`}
-            onClick={() => setMode("proxy")}
-          >
-            Proxy
-          </button>
-          <button
-            className={`tab ${mode === "direct" ? "tabActive" : ""}`}
-            onClick={() => setMode("direct")}
-          >
+          <button className={`tab ${mode === "direct" ? "tabActive" : ""}`} onClick={() => setMode("direct")}>
             Direct
+          </button>
+          <button className={`tab ${mode === "proxy" ? "tabActive" : ""}`} onClick={() => setMode("proxy")}>
+            Proxy
           </button>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="tabs">
-        <button
-          className={`tab ${tab === "params" ? "tabActive" : ""}`}
-          onClick={() => setTab("params")}
-        >
+        <button className={`tab ${tab === "params" ? "tabActive" : ""}`} onClick={() => setTab("params")}>
           Params
         </button>
-        <button
-          className={`tab ${tab === "auth" ? "tabActive" : ""}`}
-          onClick={() => setTab("auth")}
-        >
+        <button className={`tab ${tab === "auth" ? "tabActive" : ""}`} onClick={() => setTab("auth")}>
           Auth
         </button>
-        <button
-          className={`tab ${tab === "headers" ? "tabActive" : ""}`}
-          onClick={() => setTab("headers")}
-        >
+        <button className={`tab ${tab === "headers" ? "tabActive" : ""}`} onClick={() => setTab("headers")}>
           Headers
         </button>
-        <button
-          className={`tab ${tab === "body" ? "tabActive" : ""}`}
-          onClick={() => setTab("body")}
-        >
+        <button className={`tab ${tab === "body" ? "tabActive" : ""}`} onClick={() => setTab("body")}>
           Body
         </button>
-        <button
-          className={`tab ${tab === "tests" ? "tabActive" : ""}`}
-          onClick={() => setTab("tests")}
-        >
+        <button className={`tab ${tab === "tests" ? "tabActive" : ""}`} onClick={() => setTab("tests")}>
           Tests
+        </button>
+        <button className={`tab ${tab === "data" ? "tabActive" : ""}`} onClick={() => setTab("data")}>
+          Data
         </button>
       </div>
 
-      {/* Tab content */}
       {tab === "params" && <QueryParamsEditor params={params} setParams={setParams} />}
       {tab === "auth" && <AuthEditor auth={auth} setAuth={setAuth} />}
       {tab === "headers" && <HeadersEditor headers={headers} setHeaders={setHeaders} />}
-      {tab === "body" && (
-        <BodyEditor
-          method={method}
-          body={body}
-          setBody={setBody}
-          bodyError={bodyError}
-          setBodyError={setBodyError}
-        />
-      )}
+      {tab === "body" && <BodyEditor method={method} body={body} setBody={setBody} bodyError={bodyError} setBodyError={setBodyError} />}
       {tab === "tests" && <TestsEditor tests={tests} setTests={setTests} />}
+      {tab === "data" && <DataEditor rows={dataRows} setRows={setDataRows} />}
 
       <div className="smallMuted">
-        Tip: Use <span style={{ fontFamily: "var(--mono)" }}>{"{{baseUrl}}"}</span> in the URL and set it in Env → Variables.
+        Tip: Env vars work on Send. Data rows run via Runner. Use{" "}
+        <span style={{ fontFamily: "var(--mono)" }}>{"{{var}}"}</span> format.
       </div>
     </div>
   );

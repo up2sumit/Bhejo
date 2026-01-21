@@ -581,3 +581,293 @@ a { color: inherit; }
   background: var(--card);
   z-index: 1;
 }
+.runHistoryRow{
+  display:flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.runHistoryMain{
+  display:flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.collectionRow{
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+.badgeWarn{
+  border-color: rgba(255, 180, 0, 0.35);
+  background: rgba(255, 180, 0, 0.12);
+}
+.consoleItem{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 10px;
+}
+/* ========== Console (Postman-like) ========== */
+.consoleWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.consoleTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.consoleTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.consoleH1 {
+  font-weight: 900;
+  font-size: 20px;
+  letter-spacing: 0.2px;
+}
+
+.consoleSub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.consoleStats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.consoleControls {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.consoleFilters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.consoleActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.consoleSearch {
+  min-width: 320px;
+  max-width: 520px;
+}
+
+.consoleList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.consoleCard {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+
+.consoleCardTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.consoleLeft {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.consoleHeadline {
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 56vw;
+}
+
+.consoleRight {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.consoleTime {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.consoleCode {
+  margin-top: 10px;
+  border-radius: 14px;
+}
+
+.consoleCodeCompact {
+  max-height: 190px;
+  overflow: auto;
+}
+
+.consoleEmpty {
+  padding: 18px;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+/* pills */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pillInfo {
+  border-color: rgba(90, 170, 255, 0.35);
+  background: rgba(90, 170, 255, 0.12);
+}
+
+.pillWarn {
+  border-color: rgba(255, 180, 0, 0.35);
+  background: rgba(255, 180, 0, 0.12);
+}
+
+.pillErr {
+  border-color: rgba(255, 80, 80, 0.35);
+  background: rgba(255, 80, 80, 0.12);
+}
+
+.pillReq {
+  border-color: rgba(255, 120, 60, 0.35);
+  background: rgba(255, 120, 60, 0.12);
+}
+
+.pillRes {
+  border-color: rgba(100, 220, 180, 0.35);
+  background: rgba(100, 220, 180, 0.12);
+}
+
+/* badges for stats */
+.badgeWarn {
+  border-color: rgba(255, 180, 0, 0.35);
+  background: rgba(255, 180, 0, 0.12);
+}
+
+.badgeErr {
+  border-color: rgba(255, 80, 80, 0.35);
+  background: rgba(255, 80, 80, 0.12);
+}
+/* Live console list scroll area */
+.consoleListScroll {
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  padding-right: 6px;
+}
+
+/* Transaction grouping */
+.consoleTxn {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  border-radius: 18px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+}
+
+.consoleTxnHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.consoleTxnLeft {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.consoleTxnTitle {
+  font-weight: 900;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46vw;
+}
+
+.consoleTxnRight {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 42vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.consoleTxnBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.consoleEventBlock {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 16px;
+  padding: 10px;
+}
+
+.consoleEventTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.consoleLinkLine {
+  height: 18px;
+  margin-left: 24px;
+  border-left: 2px dashed rgba(255, 120, 60, 0.35);
+}

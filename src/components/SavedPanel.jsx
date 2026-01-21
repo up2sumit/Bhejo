@@ -1,85 +1,81 @@
 import { useEffect, useMemo, useState } from "react";
 
-export default function SavedPanel({ saved, onLoad, onDelete }) {
-  const PAGE_SIZE = 10;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [saved?.length]);
-
-  const visible = useMemo(() => saved.slice(0, visibleCount), [saved, visibleCount]);
-  const canLoadMore = saved.length > visibleCount;
-
-  if (!saved?.length) return <div className="smallMuted">No saved requests yet.</div>;
+export default function SavedPanel({
+  saved,
+  collections,
+  onLoad,
+  onDelete,
+  onUpdateCollection,
+}) {
+  const getCollectionName = (id) => {
+    const c = (collections || []).find((x) => x.id === id);
+    return c ? c.name : "(none)";
+  };
 
   return (
     <div className="stack" style={{ gap: 10 }}>
-      <div className="list">
-        {visible.map((item) => (
-          <div key={item.id} className="listRow">
-            <button className="listRowMain" onClick={() => onLoad(item)}>
-              <div style={{ fontWeight: 800 }}>
-                {item.name}{" "}
-                <span className="badge" style={{ marginLeft: 8 }}>
-                  {item.method}
-                </span>
+      {(!saved || saved.length === 0) ? (
+        <div className="smallMuted">No saved requests yet.</div>
+      ) : (
+        saved.map((item) => (
+          <div key={item.id} className="historyItem">
+            <div
+              className="row"
+              style={{ justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <span>{item.name}</span>
+                  <span className="badge">{item.method}</span>
+                  {item.collectionId ? (
+                    <span className="badge">{getCollectionName(item.collectionId)}</span>
+                  ) : (
+                    <span className="badge">(none)</span>
+                  )}
+                </div>
+
+                <div className="smallMuted" style={{ marginTop: 6, overflowWrap: "anywhere" }}>
+                  {item.url}
+                </div>
+
+                {/* Optional: show tests count */}
+                {Array.isArray(item.tests) && item.tests.length > 0 ? (
+                  <div className="smallMuted" style={{ marginTop: 6 }}>
+                    Tests: <span style={{ fontFamily: "var(--mono)" }}>{item.tests.length}</span>
+                  </div>
+                ) : null}
               </div>
 
-              <div className="listRowMeta">
-                <span className="listRowUrl">{item.url}</span>
-                <span className="smallMuted">
-                  Updated: {new Date(item.updatedAt || item.createdAt).toLocaleString()}
-                </span>
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <button className="btn btnSm" onClick={() => onLoad?.(item)}>
+                  Load
+                </button>
+                <button className="btn btnDanger btnSm" onClick={() => onDelete?.(item.id)}>
+                  Delete
+                </button>
               </div>
-            </button>
+            </div>
 
-            <div className="listRowActions">
-              <button
-                className="iconBtn"
-                title="Load into editor"
-                aria-label="Load"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onLoad(item);
-                }}
-              >
-                ▶
-              </button>
+            {/* Collection assignment */}
+            <div className="row" style={{ marginTop: 10, gap: 8, alignItems: "center" }}>
+              <span className="badge">Collection</span>
 
-              <button
-                className="iconBtn iconBtnDanger"
-                title="Delete"
-                aria-label="Delete"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onDelete(item.id);
-                }}
+              <select
+                className="select"
+                value={item.collectionId || ""}
+                onChange={(e) => onUpdateCollection?.(item, e.target.value)}
               >
-                🗑
-              </button>
+                <option value="">(none)</option>
+                {(collections || []).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
-        ))}
-      </div>
-
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="smallMuted">
-          Showing {Math.min(visibleCount, saved.length)} of {saved.length}
-        </div>
-
-        {canLoadMore ? (
-          <button className="btn btnSm" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>
-            Load more
-          </button>
-        ) : (
-          <button className="btn btnSm" disabled>
-            End
-          </button>
-        )}
-      </div>
+        ))
+      )}
     </div>
   );
 }

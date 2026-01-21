@@ -1,89 +1,113 @@
+// src/utils/storage.js
+
+// -------------------- Keys --------------------
 const HISTORY_KEY = "bhejo_history_v1";
 const SAVED_KEY = "bhejo_saved_v1";
 
-const ENV_KEY = "bhejo_env_v1";           // current env name
-const ENV_VARS_KEY = "bhejo_env_vars_v1"; // { dev:{}, staging:{}, prod:{} }
+const CURRENT_ENV_KEY = "bhejo_current_env_v1";
+const ENV_VARS_KEY = "bhejo_env_vars_v1";
 
-const HISTORY_LIMIT = 50;
-const SAVED_LIMIT = 200;
+const COLLECTIONS_KEY = "bhejo_collections_v1";
 
-function uuid() {
+// -------------------- Helpers --------------------
+function uuid(prefix = "id") {
   return (
     globalThis.crypto?.randomUUID?.() ||
-    `id_${Date.now()}_${Math.random().toString(16).slice(2)}`
+    `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
   );
 }
 
-/* -------------------------
-   HISTORY
--------------------------- */
-export function loadHistory() {
+function safeParse(key, fallback) {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    const fixed = parsed.map((it) => ({ id: it.id || uuid(), ...it }));
-    if (fixed.some((x, i) => x.id !== parsed?.[i]?.id)) saveHistory(fixed);
-    return fixed;
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export function saveHistory(history) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_LIMIT)));
+function safeSave(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+// -------------------- History --------------------
+export function loadHistory() {
+  const parsed = safeParse(HISTORY_KEY, []);
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+export function saveHistory(items) {
+  safeSave(HISTORY_KEY, Array.isArray(items) ? items : []);
 }
 
 export function addToHistory(item) {
-  const history = loadHistory();
-  const normalized = { id: item.id || uuid(), ...item };
+  const list = loadHistory();
 
-  const fingerprint = makeFingerprint(normalized);
-  const filtered = history.filter((h) => makeFingerprint(h) !== fingerprint);
+  const normalized = {
+    id: item.id || uuid("hist"),
+    name: item.name || "",
+    method: item.method || "GET",
+    url: item.url || "",
+    params: Array.isArray(item.params) ? item.params : [{ key: "", value: "" }],
+    headers: Array.isArray(item.headers) ? item.headers : [{ key: "", value: "" }],
+    body: item.body || "",
+    auth: item.auth || { type: "none" },
+    tests: Array.isArray(item.tests) ? item.tests : [],
+    dataRows: Array.isArray(item.dataRows) ? item.dataRows : [],
+    savedAt: item.savedAt || new Date().toISOString(),
+    lastResult: item.lastResult || null,
+  };
 
-  const updated = [normalized, ...filtered].slice(0, HISTORY_LIMIT);
+  // Put newest at top. Keep a reasonable cap (adjust if you want).
+  const updated = [normalized, ...list].slice(0, 200);
   saveHistory(updated);
   return updated;
 }
 
 export function deleteHistoryItem(id) {
-  const history = loadHistory();
-  const updated = history.filter((h) => h.id !== id);
+  const list = loadHistory();
+  const updated = list.filter((x) => x.id !== id);
   saveHistory(updated);
   return updated;
 }
 
-/* -------------------------
-   SAVED REQUESTS
--------------------------- */
+// -------------------- Saved Requests --------------------
 export function loadSaved() {
-  try {
-    const raw = localStorage.getItem(SAVED_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    const fixed = parsed.map((it) => ({ id: it.id || uuid(), ...it }));
-    if (fixed.some((x, i) => x.id !== parsed?.[i]?.id)) saveSaved(fixed);
-    return fixed;
-  } catch {
-    return [];
-  }
+  const parsed = safeParse(SAVED_KEY, []);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 export function saveSaved(items) {
-  localStorage.setItem(SAVED_KEY, JSON.stringify(items.slice(0, SAVED_LIMIT)));
+  safeSave(SAVED_KEY, Array.isArray(items) ? items : []);
 }
 
+export function deleteSaved(id) {
+  const items = loadSaved();
+  const updated = items.filter((x) => x.id !== id);
+  saveSaved(updated);
+  return updated;
+}
+
+/**
+ * Upsert by NAME (case-insensitive uniqueness).
+ * If you save again with same name, it replaces the old one.
+ */
 export function upsertSaved(newItem) {
   const items = loadSaved();
 
-  const nameKey = (newItem.name || "").trim().toLowerCase();
+  const name = (newItem.name || "").trim();
+  const nameKey = name.toLowerCase();
   const nowIso = new Date().toISOString();
 
   const normalized = {
-    id: newItem.id || uuid(),
-    name: (newItem.name || "").trim() || "Untitled",
+    id: newItem.id || uuid("sav"),
+    name: name || "Untitled",
     method: newItem.method || "GET",
     url: newItem.url || "",
-    params: newItem.params || [{ key: "", value: "" }],
-    headers: newItem.headers || [{ key: "", value: "" }],
+    params: Array.isArray(newItem.params) ? newItem.params : [{ key: "", value: "" }],
+    headers: Array.isArray(newItem.headers) ? newItem.headers : [{ key: "", value: "" }],
     body: newItem.body || "",
     auth:
       newItem.auth || {
@@ -94,12 +118,23 @@ export function upsertSaved(newItem) {
         apiKeyName: "x-api-key",
         apiKeyValue: "",
       },
+
+    // Assertions (Phase 1.9)
+    tests: Array.isArray(newItem.tests) ? newItem.tests : [],
+
+    // Collections (Phase 2.2)
+    collectionId: newItem.collectionId || "",
+
+    // Data rows / Iterations (Phase 2.3)
+    dataRows: Array.isArray(newItem.dataRows) ? newItem.dataRows : [],
+
     createdAt: newItem.createdAt || nowIso,
     updatedAt: nowIso,
   };
 
+  // Remove any existing item with same name (case-insensitive)
   const filtered = items.filter(
-    (it) => (it.name || "").trim().toLowerCase() !== nameKey
+    (it) => ((it.name || "").trim().toLowerCase() !== nameKey)
   );
 
   const updated = [normalized, ...filtered];
@@ -107,70 +142,65 @@ export function upsertSaved(newItem) {
   return updated;
 }
 
-export function deleteSaved(id) {
-  const items = loadSaved();
-  const updated = items.filter((it) => it.id !== id);
-  saveSaved(updated);
-  return updated;
-}
-
-/* -------------------------
-   ENVIRONMENTS
--------------------------- */
-
+// -------------------- Environments --------------------
 export function getCurrentEnv() {
-  return localStorage.getItem(ENV_KEY) || "dev";
+  const v = localStorage.getItem(CURRENT_ENV_KEY);
+  return (v || "dev").trim() || "dev";
 }
 
 export function setCurrentEnv(envName) {
-  localStorage.setItem(ENV_KEY, envName);
+  const n = (envName || "").trim() || "dev";
+  localStorage.setItem(CURRENT_ENV_KEY, n);
 }
 
 export function loadEnvVars() {
-  try {
-    const raw = localStorage.getItem(ENV_VARS_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = safeParse(ENV_VARS_KEY, {});
+  // expected shape: { dev: {baseUrl:"..."}, qa: {...} }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed;
+}
 
-    // Ensure default structure exists
-    const defaults = {
-      dev: { baseUrl: "https://jsonplaceholder.typicode.com", token: "" },
-      staging: { baseUrl: "", token: "" },
-      prod: { baseUrl: "", token: "" },
-    };
+export function saveEnvVars(envVarsAll) {
+  const obj =
+    envVarsAll && typeof envVarsAll === "object" && !Array.isArray(envVarsAll)
+      ? envVarsAll
+      : {};
+  safeSave(ENV_VARS_KEY, obj);
+}
 
-    const merged = { ...defaults, ...(parsed || {}) };
-    // Ensure each env exists
-    merged.dev = merged.dev || defaults.dev;
-    merged.staging = merged.staging || defaults.staging;
-    merged.prod = merged.prod || defaults.prod;
+// -------------------- Collections (Phase 2.2) --------------------
+export function loadCollections() {
+  const parsed = safeParse(COLLECTIONS_KEY, []);
+  return Array.isArray(parsed) ? parsed : [];
+}
 
-    localStorage.setItem(ENV_VARS_KEY, JSON.stringify(merged));
-    return merged;
-  } catch {
-    const fallback = {
-      dev: { baseUrl: "https://jsonplaceholder.typicode.com", token: "" },
-      staging: { baseUrl: "", token: "" },
-      prod: { baseUrl: "", token: "" },
-    };
-    localStorage.setItem(ENV_VARS_KEY, JSON.stringify(fallback));
-    return fallback;
+export function saveCollections(collections) {
+  safeSave(COLLECTIONS_KEY, Array.isArray(collections) ? collections : []);
+}
+
+export function addCollection(name) {
+  const n = (name || "").trim();
+  if (!n) return loadCollections();
+
+  const list = loadCollections();
+  if (list.some((c) => (c.name || "").toLowerCase() === n.toLowerCase())) {
+    return list; // unique by name
   }
+
+  const newItem = {
+    id: uuid("col"),
+    name: n,
+    createdAt: new Date().toISOString(),
+  };
+
+  const updated = [newItem, ...list];
+  saveCollections(updated);
+  return updated;
 }
 
-export function saveEnvVars(envVars) {
-  localStorage.setItem(ENV_VARS_KEY, JSON.stringify(envVars || {}));
-}
-
-/* -------------------------
-   Helpers
--------------------------- */
-function makeFingerprint(item) {
-  return JSON.stringify({
-    method: item.method,
-    url: item.url,
-    params: item.params,
-    headers: item.headers,
-    body: item.body,
-    auth: item.auth,
-  });
+export function deleteCollection(id) {
+  const list = loadCollections();
+  const updated = list.filter((c) => c.id !== id);
+  saveCollections(updated);
+  return updated;
 }
