@@ -195,7 +195,15 @@ a { color: inherit; }
 }
 
 .stack{ display:flex; flex-direction:column; gap: 12px; }
-.row{ display:flex; gap: 10px; align-items:center; }
+.row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:10px;cursor:pointer}
+.row:hover{background:rgba(255,255,255,0.04)}
+.rowActive{background:rgba(255,255,255,0.07)}
+.panelTitleRow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.panelTitle{font-weight:700}
+.panelSubRow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
+.muted{opacity:.7;font-size:12px}
+.btn.danger{border-color:rgba(255,0,0,.35)}
+
 
 /* History scroll only */
 .sidebarBody{
@@ -870,4 +878,416 @@ a { color: inherit; }
   height: 18px;
   margin-left: 24px;
   border-left: 2px dashed rgba(255, 120, 60, 0.35);
+}
+.modalOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999}
+.modalCard{width:min(520px,92vw);border-radius:16px;padding:16px;background:rgba(20,20,20,.98);border:1px solid rgba(255,255,255,.08)}
+.modalTitle{font-weight:800;margin-bottom:12px}
+.modalRow{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.modalLabel{font-size:12px;opacity:.75}
+.modalActions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
+
+/* ---- Collections panel UX ---- */
+.collectionsWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+
+.collectionsToolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.collectionsToolbarLeft,
+.collectionsToolbarRight {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.collectionsTree {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  padding-right: 6px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* Optional: nicer thin scrollbar */
+.collectionsTree::-webkit-scrollbar {
+  width: 8px;
+}
+.collectionsTree::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 999px;
+}
+.collectionsTree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ctxBar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* --- Phase 3.5: Per-node hover actions (⋯) --- */
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  position: relative;
+}
+
+.treeRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.treeRowActive {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.treeRowActions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.treeRow:hover .treeRowActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.kebabBtn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 4px 8px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.kebabBtn:hover {
+  filter: brightness(1.05);
+}
+
+.kebabMenu {
+  position: absolute;
+  right: 8px;
+  top: calc(100% + 6px);
+  z-index: 50;
+  min-width: 160px;
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+}
+
+.kebabItem {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 10px 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.kebabItem:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.kebabItemDanger {
+  color: #ff6b6b;
+}
+
+.kebabIcon {
+  width: 18px;
+  display: inline-flex;
+  justify-content: center;
+  opacity: 0.9;
+}
+/* --- Phase 3.5.1: Right-click context menu + drag/drop --- */
+.ctxMenu {
+  position: fixed;
+  z-index: 99999;
+  min-width: 190px;
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.42);
+}
+
+.ctxItem {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 10px 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ctxItem:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.ctxItemDanger {
+  color: #ff6b6b;
+}
+
+.ctxSep {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+}
+
+.ctxIcon {
+  width: 18px;
+  display: inline-flex;
+  justify-content: center;
+  opacity: 0.9;
+}
+
+.dragGhost {
+  opacity: 0.5;
+}
+
+.dropHint {
+  outline: 2px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+}
+/* Phase 3.5.2: reorder drop indicators */
+.dropLineTop {
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.22);
+}
+.dropLineBottom {
+  box-shadow: inset 0 -2px 0 rgba(255,255,255,0.22);
+}
+/* Phase 3.5.3 polish: smoother drop indicators + better hover */
+.treeRow {
+  transition: background 120ms ease, outline-color 120ms ease, box-shadow 120ms ease;
+}
+
+.dropHint {
+  outline: 2px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+}
+
+.dropLineTop {
+  box-shadow: inset 0 2px 0 rgba(255,255,255,0.24);
+}
+
+.dropLineBottom {
+  box-shadow: inset 0 -2px 0 rgba(255,255,255,0.24);
+}
+
+/* Make arrow zone a bit easier to hit */
+.treeArrowHit {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.treeArrowHit:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+/* Drag state */
+.dragGhost {
+  opacity: 0.55;
+}
+/* Phase 3.5.4: search + inline rename */
+.collectionsSearchRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 180px;
+}
+
+.inlineEditInput {
+  width: 100%;
+  max-width: 520px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+}
+
+.inlineEditHint {
+  opacity: 0.55;
+  font-size: 12px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+/* Phase 3.6: Folder documentation panel */
+.folderDocsPanel {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.folderDocsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.folderDocsTitle {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folderDocsTextarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  outline: none;
+  font-family: inherit;
+}
+
+.folderDocsActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.ctxItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ctxIcon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+}
+
+.kebabBtn svg {
+  opacity: 0.85;
+}
+/* Top header nav (moves sidebar tabs to top) */
+.headerWithNav {
+  align-items: center;
+  gap: 16px;
+}
+
+.topNav {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  max-width: 720px;
+  overflow-x: auto;
+}
+
+.topNav::-webkit-scrollbar {
+  height: 6px;
+}
+
+.topNavBtn {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.topNavBtn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.topNavBtn.active {
+  background: rgba(255, 120, 90, 0.12);
+  border-color: rgba(255, 120, 90, 0.35);
+}
+
+/* Make header right cluster not look too wide */
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Ensure theme toggle stays compact */
+.themeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Sidebar becomes cleaner: no second row of tabs anymore */
+.sidebarBody {
+  padding-top: 10px;
 }

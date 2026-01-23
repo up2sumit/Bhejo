@@ -1,7 +1,20 @@
+// src/utils/runner.js
+// Phase 4 (Option B): Wire JS Tests (Safe mode = Web Worker + timeout)
+// - Runs builder tests (runAssertions)
+// - Runs Postman-like JS tests (req.testScript) via runTestScriptSafe
+// - Applies env changes from BOTH pre-request script and JS test script across the run
+// - Logs request/response/test logs to consoleBus with traceId
+
 import { applyVarsToRequest } from "./vars";
 import { runAssertions } from "./assertions";
 import { applyAuthToHeaders } from "../components/AuthEditor";
 import { pushConsoleEvent } from "./consoleBus";
+import { runPreRequestScript } from "./scriptRuntime";
+
+// ✅ Safe mode runtime
+import { runTestScriptSafe as runTestScript } from "./testRuntimeSafe";
+
+const PROXY_URL = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
 
 function uuid(prefix = "id") {
   return (
@@ -61,12 +74,133 @@ function safeJsonParse(text) {
 
 function shorten(str, n = 8000) {
   const s = String(str || "");
-  return s.length > n ? s.slice(0, n) + "…(truncated)" : s;
+  return s.length > n ? s.slice(0, n) + "...(truncated)" : s;
 }
 
+function applyEnvDelta(baseVars, envDelta) {
+  const out = { ...(baseVars || {}) };
+  const delta = envDelta && typeof envDelta === "object" ? envDelta : {};
+  for (const [k, v] of Object.entries(delta)) {
+    if (v === null) delete out[k];
+    else out[k] = String(v);
+  }
+  return out;
+}
+
+function applyEnvDeltaInPlace(targetObj, envDelta) {
+  const delta = envDelta && typeof envDelta === "object" ? envDelta : {};
+  for (const [k, v] of Object.entries(delta)) {
+    if (v === null) delete targetObj[k];
+    else targetObj[k] = String(v);
+  }
+}
+
+async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
+  const proxyRes = await fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      url: finalUrl,
+      method,
+      headers: headersObj,
+      body: bodyText || "",
+    }),
+  });
+
+  const data = await proxyRes.json();
+  if (!proxyRes.ok) throw new Error(data?.error || "Proxy error");
+
+  return {
+    status: data.status,
+    statusText: data.statusText || "",
+    headers: data.headers || {},
+    rawText: data.body || "",
+  };
+}
+
+/**
+ * Runs pre-request script if any.
+ * Returns:
+ *  - requestOverride: possible request mutation
+ *  - envDelta: changes to env
+ *  - mergedVarsOut: the vars you should use for THIS request after envDelta applied
+ */
+async function runPreRequestIfAny({ traceId, req, mergedVars, rowVars }) {
+  const script = String(req.preRequestScript || "").trim();
+  if (!script) {
+    return { ok: true, requestOverride: null, envDelta: {}, mergedVarsOut: mergedVars };
+  }
+
+  const ctx = {
+    request: {
+      method: req.method,
+      url: req.url,
+      params: req.params || [{ key: "", value: "" }],
+      headers: req.headers || [{ key: "", value: "" }],
+      body: req.body || "",
+      auth: req.auth || { type: "none" },
+      mode: req.mode || "direct",
+    },
+    env: { ...(mergedVars || {}) },
+    data: { ...(rowVars || {}) },
+  };
+
+  const res = await runPreRequestScript(script, ctx);
+
+  for (const l of res.logs || []) {
+    pushConsoleEvent({
+      level: l.level || "info",
+      type: "prerequest",
+      data: {
+        traceId,
+        source: "runner",
+        at: l.at,
+        args: l.args,
+      },
+    });
+  }
+
+  if (!res.ok) {
+    pushConsoleEvent({
+      level: "error",
+      type: "prerequest_error",
+      data: {
+        traceId,
+        source: "runner",
+        name: req.name || "(unnamed)",
+        errorName: res.error?.name || "ScriptError",
+        errorMessage: res.error?.message || "Pre-request script failed",
+      },
+    });
+
+    return {
+      ok: false,
+      error: res.error || { name: "ScriptError", message: "Pre-request script failed" },
+    };
+  }
+
+  const envDelta = res.envDelta || {};
+  const mergedVarsOut = applyEnvDelta(mergedVars, envDelta);
+  const requestOverride = res.request || null;
+
+  return { ok: true, requestOverride, envDelta, mergedVarsOut };
+}
+
+/**
+ * Runner batch execution
+ * - requests: array of saved request objects
+ * - envVars: base environment object
+ * - onProgress: callback
+ * - signal: AbortSignal
+ */
 export async function runBatch({ requests, envVars, onProgress, signal }) {
   const results = [];
 
+  // Persisted env across the whole run (Postman-like)
+  const globalVars = { ...(envVars || {}) };
+
+  // Expand data rows (iterations)
   const expanded = [];
   for (const req of requests || []) {
     const rows = Array.isArray(req.dataRows) ? req.dataRows : [];
@@ -74,7 +208,12 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
       expanded.push({ base: req, idx: null, total: 0, rowVars: {} });
     } else {
       rows.forEach((row, i) => {
-        expanded.push({ base: req, idx: i, total: rows.length, rowVars: getRowVars(row) });
+        expanded.push({
+          base: req,
+          idx: i,
+          total: rows.length,
+          rowVars: getRowVars(row),
+        });
       });
     }
   }
@@ -84,46 +223,117 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
     const req = item.base;
 
     const displayName =
-      item.idx === null ? (req.name || "(unnamed)") : `${req.name || "(unnamed)"} [${item.idx + 1}/${item.total}]`;
+      item.idx === null
+        ? req.name || "(unnamed)"
+        : `${req.name || "(unnamed)"} [${item.idx + 1}/${item.total}]`;
 
-    onProgress?.({ index: i, total: expanded.length, current: { ...req, name: displayName } });
+    onProgress?.({
+      index: i,
+      total: expanded.length,
+      current: { ...req, name: displayName },
+    });
 
-    const traceId = uuid("trace"); // ✅ NEW: per iteration
+    const traceId = uuid("trace");
     const start = performance.now();
 
     try {
-      const mergedVars = { ...(envVars || {}), ...(item.rowVars || {}) };
+      // mergedVarsBase = global env + row vars (row vars only for this iteration)
+      const mergedVarsBase = { ...globalVars, ...(item.rowVars || {}) };
 
-      const finalDraft = applyVarsToRequest(
-        {
-          method: req.method,
-          url: req.url,
-          params: req.params || [{ key: "", value: "" }],
-          headers: req.headers || [{ key: "", value: "" }],
-          body: req.body || "",
-          auth: req.auth || { type: "none" },
-        },
-        mergedVars
-      );
+      // 1) Pre-request script (can mutate request + env vars)
+      const pre = await runPreRequestIfAny({
+        traceId,
+        req,
+        mergedVars: mergedVarsBase,
+        rowVars: item.rowVars || {},
+      });
+
+      if (!pre.ok) {
+        const timeMs0 = Math.round(performance.now() - start);
+
+        const structuredTotal = (req.tests || []).length;
+        const scriptTotal = String(req.testScript || "").trim() ? 1 : 0;
+
+        results.push({
+          id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
+          baseId: req.id,
+          name: displayName,
+          ok: false,
+          status: "ERR",
+          timeMs: timeMs0,
+          passed: 0,
+          total: structuredTotal + scriptTotal,
+          error: pre.error?.message || "Pre-request script failed",
+          iteration: item.idx === null ? null : item.idx + 1,
+          iterationTotal: item.total || 0,
+          rowVars: item.rowVars || {},
+        });
+
+        pushConsoleEvent({
+          level: "error",
+          type: "error",
+          data: {
+            traceId,
+            source: "runner",
+            name: displayName,
+            message: pre.error?.message || "Pre-request script failed",
+          },
+        });
+
+        continue;
+      }
+
+      // Apply pre-request envDelta to globalVars (persist across run)
+      applyEnvDeltaInPlace(globalVars, pre.envDelta || {});
+
+      // Vars to use for THIS request execution (after pre delta applied)
+      const mergedVars = pre.mergedVarsOut;
+
+      // Build draft (apply any request overrides from pre-request)
+      const baseDraft = {
+        method: req.method,
+        url: req.url,
+        params: req.params || [{ key: "", value: "" }],
+        headers: req.headers || [{ key: "", value: "" }],
+        body: req.body || "",
+        auth: req.auth || { type: "none" },
+        mode: req.mode || "direct",
+      };
+
+      const override = pre.requestOverride;
+      const draftForVars = override
+        ? {
+            ...baseDraft,
+            method: override.method || baseDraft.method,
+            url: override.url ?? baseDraft.url,
+            params: Array.isArray(override.params) ? override.params : baseDraft.params,
+            headers: Array.isArray(override.headers) ? override.headers : baseDraft.headers,
+            body: override.body ?? baseDraft.body,
+            auth: override.auth ?? baseDraft.auth,
+            mode: override.mode ?? baseDraft.mode,
+          }
+        : baseDraft;
+
+      // Apply {{vars}} AFTER pre-request modifications
+      const finalDraft = applyVarsToRequest(draftForVars, mergedVars);
 
       const finalUrl = buildFinalUrl(finalDraft.url, finalDraft.params);
 
       let headerObj = headersArrayToObject(finalDraft.headers);
       headerObj = applyAuthToHeaders(finalDraft.auth, headerObj);
 
-      const options = { method: finalDraft.method, headers: { ...headerObj }, signal };
+      const method = String(finalDraft.method || "GET").toUpperCase();
+      const hasBody = !["GET", "HEAD"].includes(method);
+      const bodyText = hasBody ? String(finalDraft.body || "") : "";
 
-      const hasBody = !["GET", "HEAD"].includes(finalDraft.method);
-      if (hasBody) {
-        const bodyText = (finalDraft.body || "").trim();
-        if (bodyText.length > 0) {
-          options.body = bodyText;
-          const hasContentType = Object.keys(options.headers).some((k) => k.toLowerCase() === "content-type");
-          if (!hasContentType) options.headers["Content-Type"] = "application/json";
-        }
+      // Default Content-Type if body exists and not provided
+      if (hasBody && bodyText.trim().length > 0) {
+        const hasContentType = Object.keys(headerObj).some(
+          (k) => k.toLowerCase() === "content-type"
+        );
+        if (!hasContentType) headerObj["Content-Type"] = "application/json";
       }
 
-      // ✅ Console: request with traceId
       pushConsoleEvent({
         level: "info",
         type: "request",
@@ -131,28 +341,87 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           traceId,
           source: "runner",
           name: displayName,
-          method: finalDraft.method,
+          mode: finalDraft.mode || "direct",
+          method,
           finalUrl,
           headers: headerObj,
           rowVars: item.rowVars || {},
-          body: hasBody ? (finalDraft.body || "") : "",
+          body: hasBody ? bodyText : "",
         },
       });
 
-      const res = await fetch(finalUrl, options);
+      // 2) Execute request (direct or proxy)
+      let status, statusText, headers, rawText;
 
-      const status = res.status;
-      const statusText = res.statusText || "";
-      const headers = await readResponseHeaders(res);
-      const rawText = await res.text();
+      if ((finalDraft.mode || "direct") === "proxy") {
+        const out = await runViaProxy({
+          finalUrl,
+          method,
+          headersObj: headerObj,
+          bodyText: hasBody ? bodyText : "",
+          signal,
+        });
+        status = out.status;
+        statusText = out.statusText;
+        headers = out.headers;
+        rawText = out.rawText;
+      } else {
+        const options = { method, headers: { ...headerObj }, signal };
+        if (hasBody && bodyText.trim().length > 0) options.body = bodyText;
 
-      const end = performance.now();
-      const timeMs = Math.round(end - start);
+        const res = await fetch(finalUrl, options);
+        status = res.status;
+        statusText = res.statusText || "";
+        headers = await readResponseHeaders(res);
+        rawText = await res.text();
+      }
 
+      const timeMs = Math.round(performance.now() - start);
       const json = safeJsonParse(rawText);
 
+      // 3) Builder tests
       const tests = Array.isArray(req.tests) ? req.tests : [];
-      const testReport = runAssertions({ tests, response: { status, timeMs, json } });
+      const testReport = runAssertions({
+        tests,
+        response: { status, timeMs, json, headers }, // ✅ include headers
+      });
+
+      // 4) JS test script (Safe mode)
+      let scriptTestReport = null;
+      const script = String(req.testScript || "").trim();
+
+      if (script) {
+        scriptTestReport = await runTestScript({
+          script,
+          response: { status, statusText, headers, rawText, json, timeMs },
+          request: {
+            ...finalDraft,
+            finalUrl,
+            headers: headerObj, // resolved headers used in call
+            body: hasBody ? bodyText : "",
+            params: finalDraft.params || [],
+          },
+          env: globalVars, // snapshot is sent to worker
+          timeoutMs: 1500,
+        });
+
+        // log script console output
+        for (const l of scriptTestReport.logs || []) {
+          pushConsoleEvent({
+            level: l.type === "error" ? "error" : l.type === "warn" ? "warn" : "info",
+            type: "testscript_log",
+            data: { traceId, source: "runner", name: displayName, message: l.message },
+          });
+        }
+
+        // ✅ Apply envDelta from test script to global vars (persist across run)
+        applyEnvDeltaInPlace(globalVars, scriptTestReport.envDelta || {});
+      }
+
+      const builderPassed = testReport.passed || 0;
+      const builderTotal = testReport.total || 0;
+      const scriptPassed = scriptTestReport?.passed || 0;
+      const scriptTotal = scriptTestReport?.total || 0;
 
       const itemResult = {
         id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
@@ -162,9 +431,10 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         status,
         statusText,
         timeMs,
-        passed: testReport.passed,
-        total: testReport.total,
+        passed: builderPassed + scriptPassed,
+        total: builderTotal + scriptTotal,
         testReport,
+        scriptTestReport,
         headers,
         rawText,
         json,
@@ -176,7 +446,6 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
 
       results.push(itemResult);
 
-      // ✅ Console: response with traceId
       pushConsoleEvent({
         level: "info",
         type: "response",
@@ -188,14 +457,19 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           timeMs,
           headers,
           body: shorten(rawText),
-          tests: { passed: testReport.passed, total: testReport.total },
+          tests: {
+            builder: { passed: builderPassed, total: builderTotal },
+            script: { passed: scriptPassed, total: scriptTotal },
+            combined: { passed: builderPassed + scriptPassed, total: builderTotal + scriptTotal },
+          },
         },
       });
     } catch (err) {
-      const end = performance.now();
-      const timeMs = Math.round(end - start);
+      const timeMs = Math.round(performance.now() - start);
+      const errorMsg = err?.name === "AbortError" ? "Aborted" : err?.message || "Failed";
 
-      const errorMsg = err?.name === "AbortError" ? "Aborted" : (err?.message || "Failed");
+      const structuredTotal = (req.tests || []).length;
+      const scriptTotal = String(req.testScript || "").trim() ? 1 : 0;
 
       results.push({
         id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
@@ -205,14 +479,13 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         status: "ERR",
         timeMs,
         passed: 0,
-        total: (req.tests || []).length,
+        total: structuredTotal + scriptTotal,
         error: errorMsg,
         iteration: item.idx === null ? null : item.idx + 1,
         iterationTotal: item.total || 0,
         rowVars: item.rowVars || {},
       });
 
-      // ✅ Console: error with traceId
       pushConsoleEvent({
         level: errorMsg === "Aborted" ? "warn" : "error",
         type: "error",

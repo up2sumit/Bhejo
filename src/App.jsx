@@ -1,3 +1,4 @@
+// src/App.jsx
 import { useEffect, useMemo, useState } from "react";
 import RequestBuilder from "./components/RequestBuilder";
 import ResponseViewer from "./components/ResponseViewer";
@@ -9,25 +10,42 @@ import ToolsPanel from "./components/ToolsPanel";
 import CollectionsPanel from "./components/CollectionsPanel";
 
 import {
-  addToHistory,
-  deleteHistoryItem,
+  // history
   loadHistory,
-  saveHistory,
+  addHistory,
+  deleteHistory,
+  clearHistory,
+
+  // legacy saved (kept for now)
   loadSaved,
-  upsertSaved,
+  upsertSavedByName,
   deleteSaved,
-  getCurrentEnv,
-  setCurrentEnv,
+
+  // env
+  loadCurrentEnv,
+  saveCurrentEnv,
   loadEnvVars,
   saveEnvVars,
+
+  // legacy collections (kept for now)
   loadCollections,
-  addCollection,
-  deleteCollection,
+
+  // Phase 3: tree collections
+  loadCollectionTrees,
 } from "./utils/storage";
 
 import "./App.css";
 
 const THEME_KEY = "bhejo_theme_v1";
+
+function tabTitle(tab) {
+  if (tab === "history") return "History";
+  if (tab === "saved") return "Saved";
+  if (tab === "env") return "Environments";
+  if (tab === "collections") return "Collections";
+  if (tab === "runner") return "Runner";
+  return "Tools";
+}
 
 export default function App() {
   const [response, setResponse] = useState(null);
@@ -35,15 +53,21 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [saved, setSaved] = useState([]);
 
-  // collections
+  // legacy collections (SavedPanel still uses this today)
   const [collections, setCollections] = useState([]);
+
+  // Phase 3 tree collections count (badge)
+  const [treeCollectionsCount, setTreeCollectionsCount] = useState(0);
 
   const [selected, setSelected] = useState(null);
   const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | collections | runner | tools
 
+  // Phase 3.4: when CollectionsPanel says "Run folder/collection/request"
+  const [runTarget, setRunTarget] = useState(null);
+
   // env
-  const [envName, setEnvNameState] = useState(getCurrentEnv());
-  const [envVarsAll, setEnvVarsAllState] = useState(loadEnvVars());
+  const [envName, setEnvName] = useState(loadCurrentEnv());
+  const [envVarsAll, setEnvVarsAll] = useState(loadEnvVars());
   const envVars = envVarsAll?.[envName] || {};
 
   // theme
@@ -52,11 +76,30 @@ export default function App() {
     return savedTheme === "light" ? "light" : "dark";
   });
 
-  // initial load
-  useEffect(() => {
+  const refreshAllFromStorage = () => {
     setHistory(loadHistory());
     setSaved(loadSaved());
     setCollections(loadCollections());
+    setEnvVarsAll(loadEnvVars());
+
+    const trees = loadCollectionTrees();
+    setTreeCollectionsCount(Array.isArray(trees) ? trees.length : 0);
+  };
+
+  // initial load
+  useEffect(() => {
+    refreshAllFromStorage();
+
+    const onStorage = (e) => {
+      if (!e?.key) return;
+      if (e.key.startsWith("bhejo_") || e.key === THEME_KEY) {
+        refreshAllFromStorage();
+      }
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // theme persist
@@ -67,7 +110,7 @@ export default function App() {
 
   // env persist
   useEffect(() => {
-    setCurrentEnv(envName);
+    saveCurrentEnv(envName);
   }, [envName]);
 
   // env vars persist
@@ -75,22 +118,25 @@ export default function App() {
     saveEnvVars(envVarsAll);
   }, [envVarsAll]);
 
-  const subtitle = useMemo(() => "Minimal API client • Phase 2.3", []);
+  const subtitle = useMemo(() => "Minimal API client • Phase 3.8.4", []);
 
+  // -----------------------
+  // History handlers
+  // -----------------------
   const handleSaveHistory = (item) => {
-    const updated = addToHistory(item);
+    const updated = addHistory(item);
     setHistory(updated);
   };
 
   const handleClearHistory = () => {
-    saveHistory([]);
+    clearHistory();
     setHistory([]);
     setSelected(null);
     setResponse(null);
   };
 
   const handleDeleteHistoryOne = (id) => {
-    const updated = deleteHistoryItem(id);
+    const updated = deleteHistory(id);
     setHistory(updated);
     if (selected?.id === id) {
       setSelected(null);
@@ -102,9 +148,11 @@ export default function App() {
     setSelected({ ...item, savedAt: new Date().toISOString() });
   };
 
-  // Save request (RequestBuilder already ensures it passes a name)
+  // -----------------------
+  // Legacy Saved handlers (kept for now)
+  // -----------------------
   const handleSaveRequest = (draft) => {
-    const updated = upsertSaved(draft);
+    const updated = upsertSavedByName(draft);
     setSaved(updated);
     setSidebarTab("saved");
   };
@@ -121,6 +169,7 @@ export default function App() {
       auth: item.auth,
       tests: item.tests || [],
       dataRows: item.dataRows || [],
+      mode: item.mode || "direct",
       savedAt: new Date().toISOString(),
     });
   };
@@ -130,39 +179,113 @@ export default function App() {
     setSaved(updated);
   };
 
-  const refreshFromStorage = () => {
-    setSaved(loadSaved());
-    setEnvVarsAllState(loadEnvVars());
-    setCollections(loadCollections());
+  // -----------------------
+  // Collections (Tree) handlers
+  // -----------------------
+  const handleLoadFromTree = (payload) => {
+    setSelected({
+      ...payload,
+      savedAt: new Date().toISOString(),
+    });
   };
 
-  const badgeRight = useMemo(() => {
-    if (sidebarTab === "history")
+  const handleRunFromTree = ({ collectionId, nodeId, kind }) => {
+    setRunTarget({ collectionId, nodeId, kind });
+    setSidebarTab("runner");
+  };
+
+  // -----------------------
+  // Top navigation (moved from sidebar)
+  // -----------------------
+  const goToTab = (tab) => {
+    if (tab === "collections") {
+      const trees = loadCollectionTrees();
+      setTreeCollectionsCount(Array.isArray(trees) ? trees.length : 0);
+    }
+    setSidebarTab(tab);
+  };
+
+  // -----------------------
+  // Right-side badge/actions (now used in sidebar header only)
+  // -----------------------
+  const sidebarHeaderRight = useMemo(() => {
+    if (sidebarTab === "history") {
       return (
         <button className="btn btnDanger btnSm" onClick={handleClearHistory}>
           Clear
         </button>
       );
-
+    }
     if (sidebarTab === "saved") return <span className="badge">{saved.length} saved</span>;
     if (sidebarTab === "env") return <span className="badge">{envName}</span>;
-    if (sidebarTab === "collections") return <span className="badge">{collections.length} collections</span>;
+    if (sidebarTab === "collections") return <span className="badge">{treeCollectionsCount}</span>;
     if (sidebarTab === "runner") return <span className="badge">{envName}</span>;
     return <span className="badge">Tools</span>;
-  }, [sidebarTab, saved.length, envName, collections.length]);
+  }, [sidebarTab, saved.length, envName, treeCollectionsCount]);
 
   return (
     <div className="container">
-      <div className="header">
+      <div className="header headerWithNav">
         <div className="brand">
           <h1>Bhejo</h1>
           <p>{subtitle}</p>
         </div>
 
+        {/* moved nav to top */}
+        <div className="topNav" role="tablist" aria-label="Primary navigation">
+          <button
+            className={`topNavBtn ${sidebarTab === "history" ? "active" : ""}`}
+            onClick={() => goToTab("history")}
+            role="tab"
+            aria-selected={sidebarTab === "history"}
+          >
+            History
+          </button>
+          <button
+            className={`topNavBtn ${sidebarTab === "saved" ? "active" : ""}`}
+            onClick={() => goToTab("saved")}
+            role="tab"
+            aria-selected={sidebarTab === "saved"}
+          >
+            Saved
+          </button>
+          <button
+            className={`topNavBtn ${sidebarTab === "env" ? "active" : ""}`}
+            onClick={() => goToTab("env")}
+            role="tab"
+            aria-selected={sidebarTab === "env"}
+          >
+            Env
+          </button>
+          <button
+            className={`topNavBtn ${sidebarTab === "collections" ? "active" : ""}`}
+            onClick={() => goToTab("collections")}
+            role="tab"
+            aria-selected={sidebarTab === "collections"}
+          >
+            Collections
+          </button>
+          <button
+            className={`topNavBtn ${sidebarTab === "runner" ? "active" : ""}`}
+            onClick={() => goToTab("runner")}
+            role="tab"
+            aria-selected={sidebarTab === "runner"}
+          >
+            Runner
+          </button>
+          <button
+            className={`topNavBtn ${sidebarTab === "tools" ? "active" : ""}`}
+            onClick={() => goToTab("tools")}
+            role="tab"
+            aria-selected={sidebarTab === "tools"}
+          >
+            Tools
+          </button>
+        </div>
+
         <div className="headerRight">
           <span className="badge">Local only</span>
 
-          {/* ✅ Postman-like: open console window */}
           <button
             className="btn btnSm"
             onClick={() => window.open("/console.html", "bhejo_console", "width=980,height=720")}
@@ -177,7 +300,6 @@ export default function App() {
             title="Toggle theme"
             aria-label="Toggle theme"
           >
-            <span className="themeIcon">{theme === "dark" ? "🌙" : "☀️"}</span>
             <span className="themeText">{theme === "dark" ? "Dark" : "Light"}</span>
             <span className="themeKnob" />
           </button>
@@ -187,49 +309,10 @@ export default function App() {
       <div className="layout">
         {/* LEFT */}
         <div className="panel">
-          <div className="panelHeader panelHeaderStack">
+          <div className="panelHeader">
             <div className="row" style={{ justifyContent: "space-between", width: "100%" }}>
-              <div className="panelTitle">Sidebar</div>
-              {badgeRight}
-            </div>
-
-            <div className="tabs">
-              <button
-                className={`tab ${sidebarTab === "history" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("history")}
-              >
-                History
-              </button>
-              <button
-                className={`tab ${sidebarTab === "saved" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("saved")}
-              >
-                Saved
-              </button>
-              <button
-                className={`tab ${sidebarTab === "env" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("env")}
-              >
-                Env
-              </button>
-              <button
-                className={`tab ${sidebarTab === "collections" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("collections")}
-              >
-                Collections
-              </button>
-              <button
-                className={`tab ${sidebarTab === "runner" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("runner")}
-              >
-                Runner
-              </button>
-              <button
-                className={`tab ${sidebarTab === "tools" ? "tabActive" : ""}`}
-                onClick={() => setSidebarTab("tools")}
-              >
-                Tools
-              </button>
+              <div className="panelTitle">{tabTitle(sidebarTab)}</div>
+              {sidebarHeaderRight}
             </div>
           </div>
 
@@ -248,32 +331,25 @@ export default function App() {
                 onLoad={handleLoadSaved}
                 onDelete={handleDeleteSavedOne}
                 onUpdateCollection={(item, collectionId) => {
-                  const updated = upsertSaved({ ...item, collectionId });
+                  const updated = upsertSavedByName({ ...item, collectionId });
                   setSaved(updated);
                 }}
               />
             ) : sidebarTab === "env" ? (
-              <EnvPanel
-                envName={envName}
-                setEnvName={setEnvNameState}
-                envVarsAll={envVarsAll}
-                setEnvVarsAll={setEnvVarsAllState}
-              />
+              <EnvPanel envName={envName} setEnvName={setEnvName} envVarsAll={envVarsAll} setEnvVarsAll={setEnvVarsAll} />
             ) : sidebarTab === "collections" ? (
-              <CollectionsPanel
-                collections={collections}
-                onAdd={(name) => setCollections(addCollection(name))}
-                onDelete={(id) => setCollections(deleteCollection(id))}
-              />
+              <CollectionsPanel onLoadRequest={handleLoadFromTree} onRunNode={handleRunFromTree} envVars={envVars} />
             ) : sidebarTab === "runner" ? (
               <RunnerPanel
-                saved={saved}
-                collections={collections}
                 envName={envName}
                 envVars={envVars}
+                runTarget={runTarget}
+                onConsumeRunTarget={() => setRunTarget(null)}
+                saved={saved}
+                collections={collections}
               />
             ) : (
-              <ToolsPanel onImported={refreshFromStorage} />
+              <ToolsPanel onImported={refreshAllFromStorage} />
             )}
           </div>
         </div>
@@ -285,6 +361,7 @@ export default function App() {
               <div className="panelTitle">Request</div>
               <span className="badge">Fetch</span>
             </div>
+
             <div className="panelBody">
               <RequestBuilder
                 initial={selected}
@@ -302,6 +379,7 @@ export default function App() {
               <div className="panelTitle">Response</div>
               <span className="badge">Preview</span>
             </div>
+
             <div className="panelBody">
               <ResponseViewer response={response} />
             </div>
