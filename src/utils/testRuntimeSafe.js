@@ -1,66 +1,112 @@
 // src/utils/testRuntimeSafe.js
+// Phase 4.3.1 - Safe JS tests runtime (Web Worker + hard timeout + returns per-test results)
 
-/**
- * Safe Postman-like JS tests using a Web Worker + hard timeout.
- * If script hangs (even infinite loop), worker is terminated.
- *
- * Returns: { passed, total, tests, logs, envDelta }
- */
-export function runTestScriptSafe({
+let workerRef = null;
+
+function getWorker() {
+  if (workerRef) return workerRef;
+  workerRef = new Worker(new URL("./testWorker.js", import.meta.url), {
+    type: "module",
+  });
+  return workerRef;
+}
+
+export async function runTestScriptSafe({
   script,
   response,
   request,
-  env = {},
+  env,
+  setEnv,
   timeoutMs = 1200,
+  allowEnvWrites = true,
 }) {
-  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const worker = getWorker();
 
-  return new Promise((resolve) => {
-    const worker = new Worker(new URL("./testWorker.js", import.meta.url), {
-      type: "module",
-    });
+  return await new Promise((resolve) => {
+    const startedAt = performance.now();
+    let done = false;
 
-    const finish = (report) => {
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      try {
+        worker.removeEventListener("message", onMsg);
+        worker.removeEventListener("error", onErr);
+      } catch {}
+    };
+
+    const finish = (payload) => {
+      cleanup();
+
+      // Apply envDelta back to caller
+      if (payload?.envDelta && setEnv) {
+        try {
+          // support object-batch set: setEnv({a:"1"})
+          setEnv(payload.envDelta);
+        } catch {
+          // fallback: per-key
+          try {
+            for (const [k, v] of Object.entries(payload.envDelta)) {
+              setEnv(k, v);
+            }
+          } catch {}
+        }
+      }
+
+      resolve({
+        ...payload,
+        timeMs: Math.round(performance.now() - startedAt),
+      });
+    };
+
+    const onMsg = (e) => finish(e.data || {});
+    const onErr = (e) =>
+      finish({
+        ok: false,
+        passed: 0,
+        failed: 0,
+        total: 0,
+        results: [],
+        logs: [],
+        error: e?.message || "Worker error",
+        timedOut: false,
+        envDelta: {},
+      });
+
+    worker.addEventListener("message", onMsg, { once: true });
+    worker.addEventListener("error", onErr, { once: true });
+
+    // Hard kill timeout (ensures no UI freeze)
+    const hard = setTimeout(() => {
+      if (done) return;
+      // terminate and recreate worker so it can't hang
       try {
         worker.terminate();
       } catch {}
-      resolve(report);
-    };
+      workerRef = null;
 
-    const timer = setTimeout(() => {
       finish({
+        ok: false,
         passed: 0,
+        failed: 0,
         total: 0,
-        tests: [],
-        logs: [{ type: "error", message: `Test script timed out after ${timeoutMs}ms` }],
+        results: [],
+        logs: [],
+        error: `Test script timeout after ${timeoutMs}ms`,
+        timedOut: true,
         envDelta: {},
       });
-    }, timeoutMs);
+      clearTimeout(hard);
+    }, Math.max(50, timeoutMs + 50));
 
-    worker.onmessage = (e) => {
-      const msg = e.data || {};
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      finish(msg.report);
-    };
-
-    worker.onerror = (err) => {
-      clearTimeout(timer);
-      finish({
-        passed: 0,
-        total: 0,
-        tests: [],
-        logs: [{ type: "error", message: `Worker error: ${err?.message || "Unknown"}` }],
-        envDelta: {},
-      });
-    };
-
+    // Send job
     worker.postMessage({
-      id,
       script: String(script || ""),
-      response: response || {},
-      request: request || {},
+      response,
+      request,
       env: env || {},
+      timeoutMs,
+      allowEnvWrites,
     });
   });
 }

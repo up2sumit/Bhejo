@@ -8,6 +8,8 @@ import EnvPanel from "./components/EnvPanel";
 import RunnerPanel from "./components/RunnerPanel";
 import ToolsPanel from "./components/ToolsPanel";
 import CollectionsPanel from "./components/CollectionsPanel";
+import RequestTabs from "./components/RequestTabs";
+import SettingsPanel from "./components/SettingsPanel";
 
 import {
   // history
@@ -34,9 +36,12 @@ import {
   loadCollectionTrees,
 } from "./utils/storage";
 
+
+import { loadSettings, saveSettings, onSettingsChange } from "./utils/settings";
 import "./App.css";
 
 const THEME_KEY = "bhejo_theme_v1";
+const REQ_TABS_KEY = "bhejo_req_tabs_v1";
 
 function tabTitle(tab) {
   if (tab === "history") return "History";
@@ -47,8 +52,94 @@ function tabTitle(tab) {
   return "Tools";
 }
 
+function uuid(prefix = "id") {
+  return (
+    globalThis.crypto?.randomUUID?.() ||
+    `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
+  );
+}
+
+function blankDraft() {
+  return {
+    id: uuid("req"),
+    name: "",
+    method: "GET",
+    url: "{{baseUrl}}/todos/1",
+    params: [{ key: "", value: "" }],
+    headers: [{ key: "", value: "" }],
+    body: "",
+    auth: {
+      type: "none",
+      bearer: "",
+      username: "",
+      password: "",
+      apiKeyName: "x-api-key",
+      apiKeyValue: "",
+    },
+    tests: [],
+    testScript: "",
+    dataRows: [],
+    mode: "direct",
+    preRequestScript: "",
+    savedAt: new Date().toISOString(),
+  };
+}
+
+function loadReqTabs() {
+  try {
+    const raw = localStorage.getItem(REQ_TABS_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    const tabs = Array.isArray(parsed?.tabs) ? parsed.tabs : [];
+    const activeId = String(parsed?.activeId || "");
+
+    const normalizedTabs = tabs
+      .map((t) => ({
+        id: String(t?.id || uuid("tab")),
+        draft: t?.draft ? { ...blankDraft(), ...t.draft } : blankDraft(),
+        dirty: false,
+        lastResponse: null, // do not persist responses
+      }))
+      .filter((t) => t.id);
+
+    if (!normalizedTabs.length) return null;
+
+    const safeActive =
+      activeId && normalizedTabs.some((t) => t.id === activeId)
+        ? activeId
+        : normalizedTabs[0].id;
+
+    return { tabs: normalizedTabs, activeId: safeActive };
+  } catch {
+    return null;
+  }
+}
+
+function persistReqTabs(tabs, activeId) {
+  try {
+    const payload = {
+      activeId,
+      tabs: (tabs || []).map((t) => ({
+        id: t.id,
+        draft: t.draft,
+      })),
+    };
+    localStorage.setItem(REQ_TABS_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
-  const [response, setResponse] = useState(null);
+
+  // Open the separate console window (dev + production base paths)
+  const openConsoleWindow = () => {
+    const base = (import.meta?.env?.BASE_URL || "/");
+    const baseNorm = base.endsWith("/") ? base : base + "/";
+    const url = new URL(`${baseNorm}console.html`, window.location.origin).toString();
+    window.open(url, "bhejo_console", "width=980,height=720");
+  };
 
   const [history, setHistory] = useState([]);
   const [saved, setSaved] = useState([]);
@@ -59,7 +150,6 @@ export default function App() {
   // Phase 3 tree collections count (badge)
   const [treeCollectionsCount, setTreeCollectionsCount] = useState(0);
 
-  const [selected, setSelected] = useState(null);
   const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | collections | runner | tools
 
   // Phase 3.4: when CollectionsPanel says "Run folder/collection/request"
@@ -75,6 +165,52 @@ export default function App() {
     const savedTheme = localStorage.getItem(THEME_KEY);
     return savedTheme === "light" ? "light" : "dark";
   });
+
+  // Settings (drawer)
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettingsState] = useState(() => loadSettings());
+
+  const palette = settings?.ui?.palette || "default";
+
+  // keep settings in sync (same tab + multi-tab)
+  useEffect(() => onSettingsChange((next) => setSettingsState(next)), []);
+
+  const setSettings = (next) => {
+    const savedSettings = saveSettings(next);
+    setSettingsState(savedSettings);
+    return savedSettings;
+  };
+
+
+  // Request tabs (Postman-like)
+  const [reqTabs, setReqTabs] = useState(() => {
+    const loaded = loadReqTabs();
+    return loaded?.tabs || [{ id: uuid("tab"), draft: blankDraft(), dirty: false, lastResponse: null }];
+  });
+  const [activeReqTabId, setActiveReqTabId] = useState(() => {
+    const loaded = loadReqTabs();
+    return loaded?.activeId || null;
+  });
+
+  // Ensure we always have a valid active tab id
+  useEffect(() => {
+    if (!reqTabs.length) return;
+    if (activeReqTabId && reqTabs.some((t) => t.id === activeReqTabId)) return;
+    setActiveReqTabId(reqTabs[0].id);
+  }, [reqTabs, activeReqTabId]);
+
+  const activeReqTab = useMemo(
+    () => reqTabs.find((t) => t.id === activeReqTabId) || reqTabs[0],
+    [reqTabs, activeReqTabId]
+  );
+
+  const activeResponse = activeReqTab?.lastResponse ?? null;
+
+  // Persist tabs (draft only; responses are not persisted)
+  useEffect(() => {
+    if (!activeReqTabId) return;
+    persistReqTabs(reqTabs, activeReqTabId);
+  }, [reqTabs, activeReqTabId]);
 
   const refreshAllFromStorage = () => {
     setHistory(loadHistory());
@@ -108,6 +244,12 @@ export default function App() {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
+
+  // palette (accent set)
+  useEffect(() => {
+    document.documentElement.setAttribute("data-palette", palette);
+  }, [palette]);
+
   // env persist
   useEffect(() => {
     saveCurrentEnv(envName);
@@ -118,7 +260,92 @@ export default function App() {
     saveEnvVars(envVarsAll);
   }, [envVarsAll]);
 
-  const subtitle = useMemo(() => "Minimal API client • Phase 3.8.4", []);
+  const subtitle = useMemo(() => "Minimal API client • Phase 3.9.0", []);
+
+  // -----------------------
+  // Request tab handlers
+  // -----------------------
+  const newTab = (draftOverride = null, { activate = true, dirty = false } = {}) => {
+    const tabId = uuid("tab");
+    const d = draftOverride ? { ...blankDraft(), ...draftOverride } : blankDraft();
+    const tab = { id: tabId, draft: { ...d, savedAt: new Date().toISOString() }, dirty, lastResponse: null };
+
+    setReqTabs((tabs) => [tab, ...tabs]);
+    if (activate) setActiveReqTabId(tabId);
+    return tabId;
+  };
+
+  const closeTab = (tabId) => {
+    setReqTabs((tabs) => {
+      const list = tabs.filter((t) => t.id !== tabId);
+
+      // never allow zero tabs
+      if (!list.length) {
+        const fresh = { id: uuid("tab"), draft: blankDraft(), dirty: false, lastResponse: null };
+        setActiveReqTabId(fresh.id);
+        return [fresh];
+      }
+
+      // if closing active tab, switch to the next best
+      if (tabId === activeReqTabId) {
+        const idx = tabs.findIndex((t) => t.id === tabId);
+        const next = list[Math.max(0, idx - 1)] || list[0];
+        setActiveReqTabId(next.id);
+      }
+
+      return list;
+    });
+  };
+
+  const switchTab = (tabId) => {
+    if (!tabId) return;
+    setActiveReqTabId(tabId);
+  };
+
+  const handleDraftChange = (draft, meta) => {
+    if (!draft || !activeReqTabId) return;
+
+    setReqTabs((tabs) =>
+      tabs.map((t) => {
+        if (t.id !== activeReqTabId) return t;
+
+        const shouldDirty = meta?.reason === "edit";
+        return {
+          ...t,
+          draft: { ...t.draft, ...draft },
+          dirty: shouldDirty ? true : t.dirty,
+        };
+      })
+    );
+  };
+
+  const handleTabResponse = (res) => {
+    if (!activeReqTabId) return;
+    setReqTabs((tabs) =>
+      tabs.map((t) => (t.id === activeReqTabId ? { ...t, lastResponse: res } : t))
+    );
+  };
+
+  const openFromPayload = (payload, { dirty = false } = {}) => {
+    const draft = {
+      id: payload.id || uuid("req"),
+      name: payload.name || "",
+      method: payload.method || "GET",
+      url: payload.url || "",
+      params: payload.params || [{ key: "", value: "" }],
+      headers: payload.headers || [{ key: "", value: "" }],
+      body: payload.body || "",
+      auth: payload.auth || { type: "none" },
+      tests: payload.tests || [],
+      testScript: payload.testScript || "",
+      dataRows: payload.dataRows || [],
+      mode: payload.mode || "direct",
+      preRequestScript: payload.preRequestScript || "",
+      savedAt: new Date().toISOString(),
+    };
+
+    newTab(draft, { activate: true, dirty });
+  };
 
   // -----------------------
   // History handlers
@@ -131,21 +358,19 @@ export default function App() {
   const handleClearHistory = () => {
     clearHistory();
     setHistory([]);
-    setSelected(null);
-    setResponse(null);
   };
 
   const handleDeleteHistoryOne = (id) => {
     const updated = deleteHistory(id);
     setHistory(updated);
-    if (selected?.id === id) {
-      setSelected(null);
-      setResponse(null);
-    }
+  };
+
+  const handleOpenFromHistory = (item) => {
+    openFromPayload(item, { dirty: false });
   };
 
   const handleCloneFromHistory = (item) => {
-    setSelected({ ...item, savedAt: new Date().toISOString() });
+    openFromPayload({ ...item, id: uuid("req"), name: (item.name || "") + " (copy)" }, { dirty: true });
   };
 
   // -----------------------
@@ -155,10 +380,12 @@ export default function App() {
     const updated = upsertSavedByName(draft);
     setSaved(updated);
     setSidebarTab("saved");
+    // mark current tab clean
+    setReqTabs((tabs) => tabs.map((t) => (t.id === activeReqTabId ? { ...t, dirty: false } : t)));
   };
 
   const handleLoadSaved = (item) => {
-    setSelected({
+    openFromPayload({
       id: item.id,
       name: item.name,
       method: item.method,
@@ -168,9 +395,10 @@ export default function App() {
       body: item.body,
       auth: item.auth,
       tests: item.tests || [],
+      testScript: item.testScript || "",
       dataRows: item.dataRows || [],
       mode: item.mode || "direct",
-      savedAt: new Date().toISOString(),
+      preRequestScript: item.preRequestScript || "",
     });
   };
 
@@ -183,10 +411,7 @@ export default function App() {
   // Collections (Tree) handlers
   // -----------------------
   const handleLoadFromTree = (payload) => {
-    setSelected({
-      ...payload,
-      savedAt: new Date().toISOString(),
-    });
+    openFromPayload(payload, { dirty: false });
   };
 
   const handleRunFromTree = ({ collectionId, nodeId, kind }) => {
@@ -288,10 +513,19 @@ export default function App() {
 
           <button
             className="btn btnSm"
-            onClick={() => window.open("/console.html", "bhejo_console", "width=980,height=720")}
+            onClick={openConsoleWindow}
             title="Open Console"
           >
             Open Console
+          </button>
+
+          <button
+            className="btn btnSm"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            aria-label="Settings"
+          >
+            ⚙️
           </button>
 
           <button
@@ -320,7 +554,7 @@ export default function App() {
             {sidebarTab === "history" ? (
               <HistoryPanel
                 history={history}
-                onSelect={setSelected}
+                onSelect={handleOpenFromHistory}
                 onClone={handleCloneFromHistory}
                 onDelete={handleDeleteHistoryOne}
               />
@@ -359,17 +593,30 @@ export default function App() {
           <div className="panel">
             <div className="panelHeader">
               <div className="panelTitle">Request</div>
-              <span className="badge">Fetch</span>
+              <span className="badge">Tabs</span>
             </div>
 
             <div className="panelBody">
+              <RequestTabs
+                tabs={reqTabs}
+                activeId={activeReqTabId}
+                onSwitch={switchTab}
+                onNew={() => newTab()}
+                onClose={closeTab}
+              />
+
+              <div style={{ height: 10 }} />
+
               <RequestBuilder
-                initial={selected}
-                onResponse={setResponse}
+                key={activeReqTabId}
+                initial={activeReqTab?.draft}
+                onResponse={handleTabResponse}
                 onSaveHistory={handleSaveHistory}
                 onSaveRequest={handleSaveRequest}
                 envName={envName}
                 envVars={envVars}
+                onDraftChange={handleDraftChange}
+                clearResponseOnLoad={false}
               />
             </div>
           </div>
@@ -381,11 +628,20 @@ export default function App() {
             </div>
 
             <div className="panelBody">
-              <ResponseViewer response={response} />
+              <ResponseViewer response={activeResponse} />
             </div>
           </div>
         </div>
       </div>
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        setSettings={setSettings}
+        theme={theme}
+        setTheme={setTheme}
+      />
     </div>
   );
 }

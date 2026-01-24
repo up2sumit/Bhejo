@@ -205,6 +205,12 @@ export default function RequestBuilder({
   onSaveRequest,
   envName,
   envVars,
+
+  // NEW: emit draft to parent (for Postman-like request tabs)
+  onDraftChange,
+
+  // NEW: for tabs, we don't want switching tabs to wipe the response pane
+  clearResponseOnLoad = true,
 }) {
   const [method, setMethod] = useState(initial?.method || "GET");
   const [url, setUrl] = useState(initial?.url || "{{baseUrl}}/todos/1");
@@ -307,7 +313,35 @@ export default function RequestBuilder({
     setRequestName(loadedName);
 
     setTab("params");
-    onResponse?.(null);
+    if (clearResponseOnLoad) onResponse?.(null);
+    // Inform parent (tabs) that this draft has loaded
+    onDraftChange?.(
+      {
+        id: initial?.id,
+        name: loadedName,
+        method: initial.method || "GET",
+        url: initial.url || "",
+        params: initial.params?.length ? initial.params : [{ key: "", value: "" }],
+        headers: initial.headers?.length ? initial.headers : [{ key: "", value: "" }],
+        body: initial.body || "",
+        auth:
+          initial.auth || {
+            type: "none",
+            bearer: "",
+            username: "",
+            password: "",
+            apiKeyName: "x-api-key",
+            apiKeyValue: "",
+          },
+        tests: Array.isArray(initial.tests) ? initial.tests : [],
+        testScript: initial.testScript || "",
+        dataRows: Array.isArray(initial.dataRows) ? initial.dataRows : [],
+        mode: initial.mode || "direct",
+        preRequestScript: initial.preRequestScript || "",
+        savedAt: initial.savedAt || new Date().toISOString(),
+      },
+      { reason: "init" }
+    );
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial?.savedAt]);
@@ -318,6 +352,45 @@ export default function RequestBuilder({
     setRequestName(suggestName(method, safeUrl));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [method, url]);
+
+  // Emit draft changes to parent (tabs). This lets App keep per-tab state.
+  useEffect(() => {
+    if (!onDraftChange) return;
+
+    onDraftChange(
+      {
+        id: initial?.id,
+        name: (requestName || "").trim(),
+        method,
+        url,
+        params,
+        headers,
+        body,
+        auth,
+        tests,
+        testScript,
+        dataRows,
+        mode,
+        preRequestScript,
+        savedAt: initial?.savedAt || new Date().toISOString(),
+      },
+      { reason: "edit" }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    requestName,
+    method,
+    url,
+    params,
+    headers,
+    body,
+    auth,
+    tests,
+    testScript,
+    dataRows,
+    mode,
+    preRequestScript,
+  ]);
 
   const finalDraft = useMemo(() => {
     return applyVarsToRequest(

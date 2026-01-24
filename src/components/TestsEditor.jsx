@@ -100,11 +100,140 @@ function BuilderTests({ tests, setTests }) {
     }
   };
 
+  const renderEditor = (t) => {
+    switch (t.type) {
+      case "status_equals":
+        return (
+          <div className="builderGrid">
+            <div className="builderLabel">Expected</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                type="number"
+                value={t.expected ?? 200}
+                onChange={(e) => update(t.id, { expected: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+        );
+
+      case "status_between":
+        return (
+          <div className="builderGrid">
+            <div className="builderLabel">Min / Max</div>
+            <div className="builderControl builderControlRow">
+              <input
+                className="input"
+                type="number"
+                value={t.min ?? 200}
+                onChange={(e) => update(t.id, { min: Number(e.target.value) })}
+                placeholder="Min"
+              />
+              <input
+                className="input"
+                type="number"
+                value={t.max ?? 299}
+                onChange={(e) => update(t.id, { max: Number(e.target.value) })}
+                placeholder="Max"
+              />
+            </div>
+          </div>
+        );
+
+      case "response_time_lt":
+        return (
+          <div className="builderGrid">
+            <div className="builderLabel">Max ms</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                type="number"
+                value={t.maxMs ?? 500}
+                onChange={(e) => update(t.id, { maxMs: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+        );
+
+      case "header_contains":
+        return (
+          <div className="builderGrid builderGridTwoRows">
+            <div className="builderLabel">Header name</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                value={t.headerName ?? ""}
+                onChange={(e) => update(t.id, { headerName: e.target.value })}
+                placeholder="content-type"
+              />
+            </div>
+
+            <div className="builderLabel">Contains</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                value={t.contains ?? ""}
+                onChange={(e) => update(t.id, { contains: e.target.value })}
+                placeholder="application/json"
+              />
+            </div>
+          </div>
+        );
+
+      case "json_path_equals":
+        return (
+          <div className="builderGrid builderGridTwoRows">
+            <div className="builderLabel">JSON path</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                value={t.path ?? ""}
+                onChange={(e) => update(t.id, { path: e.target.value })}
+                placeholder="data.id"
+              />
+            </div>
+
+            <div className="builderLabel">Expected</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                value={t.expectedValue ?? ""}
+                onChange={(e) => update(t.id, { expectedValue: e.target.value })}
+                placeholder="123"
+              />
+            </div>
+          </div>
+        );
+
+      case "json_has_key":
+        return (
+          <div className="builderGrid">
+            <div className="builderLabel">Key / path</div>
+            <div className="builderControl">
+              <input
+                className="input"
+                value={t.key ?? ""}
+                onChange={(e) => update(t.id, { key: e.target.value })}
+                placeholder="id"
+              />
+            </div>
+          </div>
+        );
+
+      default:
+        return (
+          <div className="smallMuted" style={{ marginTop: 8 }}>
+            Unknown test type
+          </div>
+        );
+    }
+  };
+
   return (
     <div className="panelSoft">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div style={{ fontWeight: 700 }}>Builder Tests</div>
-        <button className="btn btnSm" onClick={addTest}>
+      <div className="builderHeaderRow">
+        <div className="builderTitle">Builder Tests</div>
+        <button className="btn btnSm" onClick={addTest} type="button">
           + Add
         </button>
       </div>
@@ -114,19 +243,15 @@ function BuilderTests({ tests, setTests }) {
           No builder tests yet.
         </div>
       ) : (
-        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+        <div className="builderList">
           {list.map((t) => (
             <div
               key={t.id}
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                padding: 10,
-              }}
+              className={`builderTestItem ${t.enabled === false ? "isDisabled" : ""}`}
             >
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div className="row" style={{ gap: 8 }}>
-                  <label className="row" style={{ gap: 8 }}>
+              <div className="builderTopRow">
+                <div className="builderLeft">
+                  <label className="checkRow builderEnabled">
                     <input
                       type="checkbox"
                       checked={t.enabled !== false}
@@ -136,7 +261,7 @@ function BuilderTests({ tests, setTests }) {
                   </label>
 
                   <select
-                    className="select"
+                    className="select builderTypeSelect"
                     value={t.type || "status_equals"}
                     onChange={(e) => update(t.id, { type: e.target.value })}
                   >
@@ -149,137 +274,57 @@ function BuilderTests({ tests, setTests }) {
                   </select>
                 </div>
 
-                <button className="btn btnSm btnDanger" onClick={() => removeTest(t.id)}>
-                  Delete
+                <button
+                  className="testIconBtn testIconDanger delIconBtn"
+                  onClick={() => removeTest(t.id)}
+                  type="button"
+                  title="Delete"
+                  aria-label="Delete test"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M3 6h18"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M8 6V4h8v2"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M19 6l-1 14H6L5 6"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M10 11v6"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M14 11v6"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
                 </button>
               </div>
 
-              <div className="smallMuted" style={{ marginTop: 8 }}>
-                {typeLabel(t.type)}
-              </div>
+              <div className="builderMeta">{typeLabel(t.type)}</div>
 
-              {/* simple editors per type */}
-              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                {t.type === "status_equals" && (
-                  <div className="row" style={{ gap: 8 }}>
-                    <div className="smallMuted" style={{ width: 140 }}>
-                      Expected
-                    </div>
-                    <input
-                      className="input"
-                      type="number"
-                      value={t.expected ?? 200}
-                      onChange={(e) => update(t.id, { expected: Number(e.target.value) })}
-                      style={{ maxWidth: 160 }}
-                    />
-                  </div>
-                )}
-
-                {t.type === "status_between" && (
-                  <div className="row" style={{ gap: 8 }}>
-                    <div className="smallMuted" style={{ width: 140 }}>
-                      Min / Max
-                    </div>
-                    <input
-                      className="input"
-                      type="number"
-                      value={t.min ?? 200}
-                      onChange={(e) => update(t.id, { min: Number(e.target.value) })}
-                      style={{ maxWidth: 120 }}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      value={t.max ?? 299}
-                      onChange={(e) => update(t.id, { max: Number(e.target.value) })}
-                      style={{ maxWidth: 120 }}
-                    />
-                  </div>
-                )}
-
-                {t.type === "response_time_lt" && (
-                  <div className="row" style={{ gap: 8 }}>
-                    <div className="smallMuted" style={{ width: 140 }}>
-                      Max ms
-                    </div>
-                    <input
-                      className="input"
-                      type="number"
-                      value={t.maxMs ?? 500}
-                      onChange={(e) => update(t.id, { maxMs: Number(e.target.value) })}
-                      style={{ maxWidth: 160 }}
-                    />
-                  </div>
-                )}
-
-                {t.type === "header_contains" && (
-                  <>
-                    <div className="row" style={{ gap: 8 }}>
-                      <div className="smallMuted" style={{ width: 140 }}>
-                        Header name
-                      </div>
-                      <input
-                        className="input"
-                        value={t.headerName ?? ""}
-                        onChange={(e) => update(t.id, { headerName: e.target.value })}
-                        placeholder="content-type"
-                      />
-                    </div>
-                    <div className="row" style={{ gap: 8 }}>
-                      <div className="smallMuted" style={{ width: 140 }}>
-                        Contains
-                      </div>
-                      <input
-                        className="input"
-                        value={t.contains ?? ""}
-                        onChange={(e) => update(t.id, { contains: e.target.value })}
-                        placeholder="application/json"
-                      />
-                    </div>
-                  </>
-                )}
-
-                {t.type === "json_path_equals" && (
-                  <>
-                    <div className="row" style={{ gap: 8 }}>
-                      <div className="smallMuted" style={{ width: 140 }}>
-                        JSON path
-                      </div>
-                      <input
-                        className="input"
-                        value={t.path ?? ""}
-                        onChange={(e) => update(t.id, { path: e.target.value })}
-                        placeholder="data.id"
-                      />
-                    </div>
-                    <div className="row" style={{ gap: 8 }}>
-                      <div className="smallMuted" style={{ width: 140 }}>
-                        Expected
-                      </div>
-                      <input
-                        className="input"
-                        value={t.expectedValue ?? ""}
-                        onChange={(e) => update(t.id, { expectedValue: e.target.value })}
-                        placeholder="123"
-                      />
-                    </div>
-                  </>
-                )}
-
-                {t.type === "json_has_key" && (
-                  <div className="row" style={{ gap: 8 }}>
-                    <div className="smallMuted" style={{ width: 140 }}>
-                      Key / path
-                    </div>
-                    <input
-                      className="input"
-                      value={t.key ?? ""}
-                      onChange={(e) => update(t.id, { key: e.target.value })}
-                      placeholder="id"
-                    />
-                  </div>
-                )}
-              </div>
+              <div className="builderEditor">{renderEditor(t)}</div>
             </div>
           ))}
         </div>
@@ -287,6 +332,7 @@ function BuilderTests({ tests, setTests }) {
     </div>
   );
 }
+
 
 function JsTests({ testScript, setTestScript }) {
   const [template, setTemplate] = useState("");

@@ -62,7 +62,6 @@ function parseStatusExpected(expected) {
 
   if (parts.length) return { mode: "list", values: parts };
 
-  // fallback single number
   const n = Number(s);
   if (Number.isFinite(n)) return { mode: "single", values: [n] };
 
@@ -86,23 +85,33 @@ function parseRequiredPaths(expected) {
     .filter(Boolean);
 }
 
+/**
+ * runAssertions
+ * - Skips tests where enabled === false (so unchecked tests do NOT run)
+ * - Supports both "legacy" types and new Builder UI types:
+ *   - status_between, response_time_lt, header_contains (headerName/contains),
+ *     json_path_equals (expectedValue), json_has_key (key)
+ */
 export function runAssertions({ tests, response }) {
-  const results = [];
-  const total = tests?.length || 0;
+  const list = Array.isArray(tests) ? tests : [];
+  const enabledTests = list.filter((t) => t && t.enabled !== false);
 
-  if (!tests || tests.length === 0) {
+  if (enabledTests.length === 0) {
     return { total: 0, passed: 0, failed: 0, results: [] };
   }
+
+  const results = [];
+  const total = enabledTests.length;
 
   const status = response?.status;
   const timeMs = response?.timeMs;
   const json = response?.json;
   const headers = response?.headers || {};
 
-  for (const t of tests) {
+  for (const t of enabledTests) {
     const type = String(t?.type || "").trim();
 
-    // ---- Existing (backward compatible) ----
+    // ---- Builder UI: Status equals ----
     if (type === "status_equals") {
       const expected = Number(t.expected);
       const pass = status === expected;
@@ -115,8 +124,23 @@ export function runAssertions({ tests, response }) {
       continue;
     }
 
-    if (type === "time_lt") {
-      const max = Number(t.expected);
+    // ---- Builder UI: Status between (min/max) ----
+    if (type === "status_between") {
+      const min = Number(t.min ?? 200);
+      const max = Number(t.max ?? 299);
+      const pass = typeof status === "number" && status >= min && status <= max;
+      results.push({
+        pass,
+        message: pass
+          ? `Status is in ${min}-${max}`
+          : `Expected status in ${min}-${max}, got ${status}`,
+      });
+      continue;
+    }
+
+    // ---- Legacy: time_lt + Builder UI: response_time_lt ----
+    if (type === "time_lt" || type === "response_time_lt") {
+      const max = Number(t.maxMs ?? t.expected);
       const pass = Number(timeMs) < max;
       results.push({
         pass,
@@ -127,9 +151,10 @@ export function runAssertions({ tests, response }) {
       continue;
     }
 
-    if (type === "json_equals") {
+    // ---- Legacy: json_equals + Builder UI: json_path_equals ----
+    if (type === "json_equals" || type === "json_path_equals") {
       const path = (t.path || "").trim();
-      const expected = (t.expected ?? "").toString();
+      const expected = (t.expectedValue ?? t.expected ?? "").toString();
       const got = getByPathWithExists(json, path);
       const actual = got.value;
 
@@ -143,6 +168,7 @@ export function runAssertions({ tests, response }) {
       continue;
     }
 
+    // ---- Legacy: json_contains ----
     if (type === "json_contains") {
       const path = (t.path || "").trim();
       const expected = (t.expected ?? "").toString();
@@ -159,7 +185,7 @@ export function runAssertions({ tests, response }) {
       continue;
     }
 
-    // ---- New: Status in list/range ----
+    // ---- New: Status in list/range (kept) ----
     if (type === "status_in") {
       const cfg = parseStatusExpected(t.expected);
       let pass = false;
@@ -182,9 +208,9 @@ export function runAssertions({ tests, response }) {
       continue;
     }
 
-    // ---- New: Header checks ----
+    // ---- Header checks (supports both legacy and Builder UI fields) ----
     if (type === "header_exists") {
-      const headerName = (t.path || "").trim();
+      const headerName = (t.headerName ?? t.path ?? "").trim();
       const v = getHeaderValue(headers, headerName);
       const pass = v !== "";
       results.push({
@@ -197,7 +223,7 @@ export function runAssertions({ tests, response }) {
     }
 
     if (type === "header_equals") {
-      const headerName = (t.path || "").trim();
+      const headerName = (t.headerName ?? t.path ?? "").trim();
       const expected = String(t.expected ?? "");
       const v = getHeaderValue(headers, headerName);
       const pass = v !== "" && v === expected;
@@ -211,8 +237,8 @@ export function runAssertions({ tests, response }) {
     }
 
     if (type === "header_contains") {
-      const headerName = (t.path || "").trim();
-      const expected = String(t.expected ?? "");
+      const headerName = (t.headerName ?? t.path ?? "").trim();
+      const expected = String(t.contains ?? t.expected ?? "");
       const v = getHeaderValue(headers, headerName);
       const pass = v !== "" && v.toLowerCase().includes(expected.toLowerCase());
       results.push({
@@ -265,6 +291,20 @@ export function runAssertions({ tests, response }) {
         message: pass
           ? `JSON ${path} is not empty`
           : `Expected JSON ${path} to be not empty`,
+      });
+      continue;
+    }
+
+    // ---- Builder UI: JSON has key/path ----
+    if (type === "json_has_key") {
+      const path = String(t.key ?? t.path ?? "").trim();
+      const got = getByPathWithExists(json, path);
+      const pass = got.exists;
+      results.push({
+        pass,
+        message: pass
+          ? `JSON has key/path "${path}"`
+          : `Expected JSON to have key/path "${path}"`,
       });
       continue;
     }

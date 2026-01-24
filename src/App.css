@@ -26,10 +26,10 @@
   /* Accent (orange/red) */
   --accent: #ff6a3d;
   --accent2: #ff3d5a;
-  --accentSoft: rgba(255,106,61,0.14);
+  --accentSoft: rgb(from var(--accent) r g b / 0.14);
 
   --danger: #ff3d5a;
-  --dangerSoft: rgba(255,61,90,0.14);
+  --dangerSoft: rgb(from var(--accent2) r g b / 0.14);
 
   --ok: #2dd4bf;
   --okSoft: rgba(45,212,191,0.14);
@@ -52,10 +52,10 @@
 
   --accent: #ff6a3d;
   --accent2: #ff3d5a;
-  --accentSoft: rgba(255,106,61,0.14);
+  --accentSoft: rgb(from var(--accent) r g b / 0.14);
 
   --danger: #ff3d5a;
-  --dangerSoft: rgba(255,61,90,0.12);
+  --dangerSoft: rgb(from var(--accent2) r g b / 0.12);
 
   --ok: #0ea5a4;
   --okSoft: rgba(14,165,164,0.14);
@@ -99,7 +99,7 @@ body{
 
   background:
     radial-gradient(900px 650px at 20% 0%, var(--accentSoft), transparent 60%),
-    radial-gradient(900px 650px at 80% 0%, rgba(255,61,90,0.10), transparent 60%),
+    radial-gradient(900px 650px at 80% 0%, rgb(from var(--accent2) r g b / 0.10), transparent 60%),
     linear-gradient(180deg, var(--bg2), var(--bg));
 }
 
@@ -240,8 +240,8 @@ a { color: inherit; }
 }
 
 .input:focus, .select:focus, .textarea:focus{
-  border-color: rgba(255,106,61,0.55);
-  box-shadow: 0 0 0 4px rgba(255,106,61,0.14);
+  border-color: rgb(from var(--accent) r g b / 0.55);
+  box-shadow: 0 0 0 4px rgb(from var(--accent) r g b / 0.14);
 }
 
 .btn{
@@ -264,14 +264,17 @@ a { color: inherit; }
 }
 
 .btnPrimary{
-  background: linear-gradient(180deg, rgba(255,106,61,0.95), rgba(255,61,90,0.95));
-  border-color: rgba(255,106,61,0.55);
+  background: linear-gradient(180deg,
+    rgb(from var(--accent) r g b / 0.95),
+    rgb(from var(--accent2) r g b / 0.95)
+  );
+  border-color: rgb(from var(--accent) r g b / 0.55);
 }
 .btnPrimary:hover{ filter: brightness(1.07); }
 
 .btnDanger{
   background: var(--dangerSoft);
-  border-color: rgba(255,61,90,0.40);
+  border-color: rgb(from var(--danger) r g b / 0.40);
   color: var(--text);
 }
 
@@ -295,7 +298,7 @@ a { color: inherit; }
 }
 .badgeErr{
   color: var(--danger);
-  border-color: rgba(255,61,90,0.40);
+  border-color: rgb(from var(--danger) r g b / 0.40);
   background: var(--dangerSoft);
 }
 
@@ -383,7 +386,7 @@ a { color: inherit; }
   height: 10px;
   border-radius: 999px;
   background: linear-gradient(180deg, var(--accent), var(--accent2));
-  box-shadow: 0 0 0 4px rgba(255,106,61,0.10);
+  box-shadow: 0 0 0 4px rgb(from var(--accent) r g b / 0.10);
 }
 
 /* =========================
@@ -417,9 +420,9 @@ a { color: inherit; }
 
 .tabActive{
   color: var(--text);
-  border-color: rgba(255,106,61,0.50);
-  box-shadow: 0 0 0 4px rgba(255,106,61,0.10);
-  background: linear-gradient(180deg, rgba(255,106,61,0.22), rgba(255,61,90,0.10));
+  border-color: rgb(from var(--accent) r g b / 0.50);
+  box-shadow: 0 0 0 4px rgb(from var(--accent) r g b / 0.10);
+  background: linear-gradient(180deg, rgba(255,106,61,0.22), rgb(from var(--accent2) r g b / 0.10));
 }
 
 /* =========================
@@ -517,7 +520,7 @@ a { color: inherit; }
 
 .iconBtnDanger{
   border-color: rgba(255,61,90,0.45);
-  background: rgba(255,61,90,0.12);
+  background: rgb(from var(--accent2) r g b / 0.12);
 }
 
 .panelHeaderStack{
@@ -1290,4 +1293,844 @@ a { color: inherit; }
 /* Sidebar becomes cleaner: no second row of tabs anymore */
 .sidebarBody {
   padding-top: 10px;
+}
+
+/* =========================
+   RESPONSE VIEWER (Postman-like tabs) — REFINED
+   ========================= */
+
+.responseWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.responseTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.responseMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Pills (status/time/size) */
+.statusPill,
+.metaPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid var(--border);
+  background: var(--inputBg);
+}
+
+.statusPill.ok {
+  border-color: rgba(45,212,191,0.40);
+  background: var(--okSoft);
+  color: var(--ok);
+}
+
+.statusPill.bad {
+  border-color: rgb(from var(--danger) r g b / 0.40);
+  background: var(--dangerSoft);
+  color: var(--danger);
+}
+
+/* Tabs bar (more Postman-like) */
+.responseTabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.tabBtn {
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
+  border-radius: 12px 12px 0 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.95;
+  transition: color 120ms ease, background 120ms ease, filter 120ms ease;
+}
+
+.tabBtn:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+  filter: brightness(1.02);
+}
+
+/* Active tab: cleaner + orange underline */
+.tabBtn.active {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+}
+
+.tabBtn.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+}
+
+/* Panel: keep content height stable and make only inner content scroll */
+.responsePanel {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+  background: var(--panel);
+
+  /* helps the response area feel “fixed” like Postman */
+  max-height: 56vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Body/Raw blocks */
+.responseBody {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+
+  /* fill the panel; scroll here */
+  flex: 1;
+  overflow: auto;
+
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+/* nicer scrollbars (optional) */
+.responseBody::-webkit-scrollbar { width: 10px; height: 10px; }
+.responseBody::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 999px; }
+.responseBody::-webkit-scrollbar-track { background: transparent; }
+
+/* Headers table */
+.headersTable {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.headersTable table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.headersTable th,
+.headersTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.headersTable thead th {
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.headersTable td {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+/* Tests area */
+.testsWrap {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+
+.testBlock {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+}
+
+.testBlockTitle {
+  font-weight: 900;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.testList {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.testList li {
+  margin: 6px 0;
+  font-size: 13px;
+}
+
+.testList li.pass { color: var(--ok); }
+.testList li.fail { color: var(--danger); }
+
+.mono { font-family: var(--mono); }
+.small { font-size: 12px; }
+
+/* =========================
+   REQUEST TABS (Postman-like)
+   ========================= */
+
+.reqTabsBar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  border:1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  padding: 8px;
+  border-radius: 16px;
+}
+
+.reqTabsScroll{
+  display:flex;
+  gap:6px;
+  overflow:auto;
+  flex:1;
+  padding-bottom:2px;
+}
+
+.reqTabsScroll::-webkit-scrollbar{ height: 8px; }
+.reqTabsScroll::-webkit-scrollbar-thumb{ background: rgba(255,255,255,0.12); border-radius: 999px; }
+.reqTabsScroll::-webkit-scrollbar-track{ background: transparent; }
+
+.reqTab{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border:1px solid transparent;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor:pointer;
+  white-space: nowrap;
+}
+
+.reqTab:hover{ background: rgba(255,255,255,0.04); }
+
+.reqTab.active{
+  border-color: rgb(from var(--accent) r g b / 0.35);
+  background: rgb(from var(--accent) r g b / 0.10);
+}
+
+.reqTabTitle{ font-weight: 800; font-size: 13px; }
+
+.reqTabDot{ margin-left: 6px; color: var(--accent); font-weight: 900; }
+
+.reqTabClose{
+  opacity: 0.70;
+  font-weight: 900;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.reqTab:hover .reqTabClose{ opacity: 1; background: rgba(255,255,255,0.06); }
+
+.reqTabAdd{
+  width: 42px;
+  height: 38px;
+  border-radius: 14px;
+  border:1px solid var(--border);
+  background: var(--inputBg);
+  color: var(--text);
+  cursor:pointer;
+  font-weight: 900;
+}
+
+.reqTabAdd:hover{ filter: brightness(1.05); }
+/* =========================
+   REQUEST HEADER: use empty header space (Postman-like)
+   ========================= */
+
+.requestHeaderBadges{
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.reqTabsBarCompact{
+  border: none;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Make tabs sit nicely in header */
+.reqTabsBarCompact .reqTabsScroll{
+  padding: 0;
+}
+
+.reqTabsBarCompact .reqTab{
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+
+.reqTabsBarCompact .reqTab.active{
+  border-color: rgb(from var(--accent) r g b / 0.35);
+  background: rgb(from var(--accent) r g b / 0.10);
+}
+
+/* Align + button with header look */
+.reqTabsBarCompact .reqTabAdd{
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.02);
+}
+
+/* Slightly tighter header spacing */
+.panelHeader.requestHeader{
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* =========================
+   Request tabs: shorter labels + scroll buttons
+   Paste into end of App.css
+   ========================= */
+
+.reqTabsScroll{
+  scroll-behavior: smooth;
+}
+
+/* Ensure tab text doesn't take whole row */
+.reqTabTitle{
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Left/Right scroll buttons */
+.reqTabNavBtn{
+  width: 38px;
+  height: 36px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 18px;
+  line-height: 1;
+  transition: filter 140ms ease, transform 90ms ease, opacity 140ms ease;
+}
+
+.reqTabNavBtn:hover{ filter: brightness(1.06); }
+.reqTabNavBtn:active{ transform: translateY(1px); }
+.reqTabNavBtn:disabled{
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* =========================
+   RESPONSE: Test failure styling (red + error details)
+   ========================= */
+
+.testResultRow{
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.02);
+}
+
+.testResultRow.fail{
+  border-color: rgba(255,61,90,0.35);
+  background: rgba(255,61,90,0.06);
+}
+
+.testResultRow.pass{
+  border-color: rgba(45,212,191,0.25);
+  background: rgba(45,212,191,0.05);
+}
+
+.testResultMsg{
+  flex: 1;
+  min-width: 0;
+  opacity: 0.95;
+}
+
+/* Script test list -> Postman-like cards */
+.testList{
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.testCase{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(255,255,255,0.02);
+}
+
+.testCase.fail{
+  border-color: rgba(255,61,90,0.35);
+  background: rgba(255,61,90,0.06);
+}
+
+.testCase.pass{
+  border-color: rgba(45,212,191,0.25);
+  background: rgba(45,212,191,0.05);
+}
+
+.testCaseTop{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+
+.testCaseMark{
+  font-weight: 900;
+  width: 18px;
+  text-align: center;
+}
+
+.testCaseName{
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.testCaseErr{
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,61,90,0.25);
+  background: rgba(255,61,90,0.08);
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* =========================
+   TESTS: disabled builder tests + script failure banner
+   (Add this at the end of App.css)
+   ========================= */
+
+.testBlockFail{
+  border-color: rgba(255,61,90,0.30) !important;
+  background: rgba(255,61,90,0.05) !important;
+}
+
+.testSummaryFail{
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.testFailNote{
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,61,90,0.25);
+  background: rgba(255,61,90,0.08);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* =========================
+   Response tabs: show dot on failing Tests tab
+   ========================= */
+
+.tabDanger{
+  color: var(--text);
+}
+
+.tabDotDanger{
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--danger);
+  box-shadow: 0 0 0 4px rgb(from var(--accent2) r g b / 0.12);
+}
+
+/* =========================
+   TESTS (Delete icon button)
+   ========================= */
+
+.builderTestItem .delIconBtn{
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-1px);
+}
+
+.builderTestItem:hover .delIconBtn{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Small square icon button (for delete / actions) */
+.testIconBtn{
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--border2);
+  background: var(--inputBg);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: filter 140ms ease, transform 90ms ease, opacity 140ms ease, border-color 140ms ease;
+}
+
+.testIconBtn:hover{ filter: brightness(1.06); }
+.testIconBtn:active{ transform: translateY(1px); }
+
+.testIconDanger{
+  border-color: rgba(255,61,90,0.45);
+  background: rgb(from var(--accent2) r g b / 0.12);
+}
+
+/* =========================
+   Settings drawer (ensure visible + professional)
+   ========================= */
+
+.settingsOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(3px);
+  z-index: 9999;
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px;
+}
+
+.settingsDrawer{
+  width: min(560px, 96vw);
+  height: min(92vh, 860px);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.settingsHeader{
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settingsTitle .settingsH1{
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.settingsTitle .settingsSub{
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.settingsHeaderRight{
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settingsCloseBtn{
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.settingsBody{
+  padding: 14px 16px;
+  overflow: auto;
+  flex: 1;
+}
+
+.settingsSection{
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.02);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.settingsSectionTitle{
+  font-weight: 900;
+  margin-bottom: 10px;
+}
+
+.settingsGrid2{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 700px){
+  .settingsGrid2{ grid-template-columns: 1fr; }
+}
+
+.settingsField .settingsLabel{
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.settingsHint{
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.settingsChecks{
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.checkRow{
+  display:flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.settingsFooter{
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* =========================
+   Header overflow fix (keeps Settings visible)
+   ========================= */
+
+.headerWithNav{
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.headerRight{
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.topNav{
+  min-width: 280px;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 1100px){
+  .topNav{
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+  .brand{ order: 1; }
+  .headerRight{ order: 2; }
+}
+
+/* =========================
+   Accent palettes
+   ========================= */
+
+/* Default palette = existing tokens (no override) */
+:root[data-palette="default"]{
+}
+
+/* Imperial Topaz palette */
+:root[data-palette="imperial_topaz"]{
+  /* palette source:
+     #FFF8E7 (soft)
+     #FFD77A (light)
+     #E6A520 (gold)
+     #7A4A00 (deep)
+  */
+  --accent: #E6A520;
+  --accent2: #7A4A00;
+  --accentSoft: rgba(230,165,32,0.16);
+}
+
+/* Royal Amethyst palette */
+:root[data-palette="royal_amethyst"]{
+  /* palette source:
+     #F2EAF7 (soft)
+     #C59DD9 (light)
+     #7A3F91 (amethyst)
+     #2B0D3E (deep)
+  */
+  --accent: #7A3F91;
+  --accent2: #2B0D3E;
+  --accentSoft: rgba(122,63,145,0.16);
+}
+
+/* =========================
+   Builder Tests – compact, full-width, professional
+   ========================= */
+
+.builderHeaderRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+}
+
+.builderTitle{
+  font-weight: 900;
+}
+
+.builderList{
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.builderTestItem{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255,255,255,0.02);
+}
+
+.builderTestItem.isDisabled{
+  opacity: 0.72;
+}
+
+.builderTopRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+}
+
+.builderLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.builderEnabled{
+  white-space: nowrap;
+}
+
+.builderTypeSelect{
+  min-width: 190px;
+}
+
+.builderMeta{
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.builderEditor{
+  margin-top: 10px;
+}
+
+.builderGrid{
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 10px 12px;
+  align-items: center;
+}
+
+.builderGridTwoRows{
+  grid-auto-rows: minmax(36px, auto);
+}
+
+.builderLabel{
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.builderControl{
+  min-width: 0;
+}
+
+.builderControl .input,
+.builderControl .select{
+  width: 100%;
+}
+
+.builderControlRow{
+  display:flex;
+  gap: 10px;
+}
+
+.builderControlRow .input{
+  flex: 1 1 0;
+}
+
+/* Mobile */
+@media (max-width: 760px){
+  .builderLeft{
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .builderTypeSelect{
+    min-width: 160px;
+  }
+  .builderGrid{
+    grid-template-columns: 1fr;
+  }
+  .builderLabel{
+    margin-bottom: -6px;
+  }
 }
