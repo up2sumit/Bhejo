@@ -2134,3 +2134,1032 @@ a { color: inherit; }
     margin-bottom: -6px;
   }
 }
+
+/* =========================
+   Builder Tests – keep Enabled + Type + Delete on ONE line
+   ========================= */
+
+.builderTopRow{
+  align-items: center;
+}
+
+.builderLeft{
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.builderTypeSelect{
+  width: 100%;
+  min-width: 0; /* allow shrink instead of pushing delete icon down */
+}
+
+.testIconBtn, .delIconBtn{
+  flex: 0 0 auto;
+}
+
+/* Mobile: allow wrap neatly */
+@media (max-width: 760px){
+  .builderLeft{
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+}
+
+/* =========================
+   Phase 5: Request tab rename input
+   ========================= */
+.reqTabTitle{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.reqTabLabel{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reqTabRenameInput{
+  width: 260px;
+  max-width: 52vw;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: inherit;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.reqTabRenameInput:focus{
+  border-color: rgba(255,255,255,0.22);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+}
+
+/* =========================
+   Request Tabs – pro navigation (scroll buttons + context menu)
+   ========================= */
+
+.reqTabsNavBtn{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  user-select:none;
+}
+
+.reqTabsNavBtn:hover{ background: rgba(255,255,255,0.04); }
+
+.reqTabsNavBtn:disabled{
+  opacity: 0.35;
+  cursor: default;
+}
+
+.reqTabMenu{
+  position: fixed;
+  z-index: 9999;
+  min-width: 190px;
+  background: rgba(15,18,30,0.98);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+  padding: 6px;
+  backdrop-filter: blur(10px);
+}
+
+:root[data-theme="light"] .reqTabMenu{
+  background: rgba(255,255,255,0.98);
+  border: 1px solid rgba(0,0,0,0.10);
+}
+
+.reqTabMenuItem{
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.reqTabMenuItem:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+:root[data-theme="light"] .reqTabMenuItem:hover{
+  background: rgba(0,0,0,0.05);
+}
+
+.reqTabMenuItem:disabled{
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* =========================
+   Request Tabs – Step 3 polish (hover close, menu separator)
+   ========================= */
+
+.reqTabClose{
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.reqTab:hover .reqTabClose,
+.reqTab.active .reqTabClose{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reqTabClose:hover{
+  transform: translateY(-1px);
+}
+
+.reqTabMenuSep{
+  height: 1px;
+  margin: 6px 6px;
+  background: rgba(255,255,255,0.10);
+}
+
+:root[data-theme="light"] .reqTabMenuSep{
+  background: rgba(0,0,0,0.10);
+}
+
+/* =========================
+   Response Viewer – Postman-like Body modes + Search + JSON Preview
+   ========================= */
+
+.responseTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+}
+
+.responseActions{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+
+.responseSubBar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.responseSubTabs{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.subTabBtn{
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 800;
+  user-select:none;
+}
+
+.subTabBtn:hover{ background: rgba(255,255,255,0.04); }
+
+.subTabBtn.active{
+  border-color: rgba(255,255,255,0.22);
+  background: var(--accentSoft);
+}
+
+.subTabBtn:disabled{
+  opacity: 0.45;
+  cursor: default;
+}
+
+.respSearch{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex: 1 1 auto;
+  justify-content:flex-end;
+}
+
+.respSearchInput{
+  max-width: 420px;
+  width: 100%;
+}
+
+.respSearchMeta{
+  min-width: 64px;
+  text-align:center;
+}
+
+.respSearchHint{
+  padding-right: 6px;
+}
+
+.respMark{
+  background: rgba(255, 232, 106, 0.22);
+  color: inherit;
+  border-radius: 6px;
+  padding: 0 2px;
+}
+
+.respMark.active{
+  background: rgba(255, 232, 106, 0.55);
+  outline: 1px solid rgba(255, 232, 106, 0.55);
+}
+
+/* JSON Preview tree */
+.jsonTree{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.02);
+}
+
+.jsonRow{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.jsonRow:first-child{
+  border-top: 0;
+}
+
+.jsonRow:hover{
+  background: rgba(255,255,255,0.04);
+}
+
+.jsonTwisty{
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight: 900;
+}
+
+.jsonTwisty.disabled{
+  opacity: 0.55;
+  cursor: default;
+}
+
+.jsonKey{
+  flex: 0 0 auto;
+  min-width: 120px;
+  color: var(--text);
+}
+
+.jsonKeyText{
+  font-weight: 800;
+}
+
+.jsonValue{
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jsonValue.prim{
+  color: var(--text);
+  opacity: 0.92;
+}
+
+.respToast{
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9999;
+  background: rgba(15,18,30,0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+  backdrop-filter: blur(10px);
+  max-width: 520px;
+}
+
+:root[data-theme="light"] .respToast{
+  background: rgba(255,255,255,0.98);
+  border: 1px solid rgba(0,0,0,0.12);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.15);
+}
+
+/* Script error card inside Tests tab */
+.scriptErrorCard{
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+}
+
+/* =========================
+   Response Viewer – Step 5 polish (syntax colors + preview context menu + preview search)
+   ========================= */
+
+.jsonPretty .jTokKey{ color: var(--accent); font-weight: 800; }
+.jsonPretty .jTokString{ color: rgba(255,255,255,0.86); }
+:root[data-theme="light"] .jsonPretty .jTokString{ color: rgba(0,0,0,0.78); }
+
+.jsonPretty .jTokNumber{ color: rgba(122, 206, 255, 0.92); }
+:root[data-theme="light"] .jsonPretty .jTokNumber{ color: rgba(0, 86, 164, 0.95); }
+
+.jsonPretty .jTokBool{ color: rgba(180, 255, 198, 0.95); }
+:root[data-theme="light"] .jsonPretty .jTokBool{ color: rgba(0, 130, 68, 0.95); }
+
+.jsonPretty .jTokNull{ color: rgba(255, 210, 140, 0.92); }
+:root[data-theme="light"] .jsonPretty .jTokNull{ color: rgba(175, 80, 0, 0.92); }
+
+.jsonTree{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.02);
+}
+
+.jsonRow{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  position: relative;
+  user-select: none;
+}
+
+:root[data-theme="light"] .jsonRow{
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.jsonRow:hover{
+  background: rgba(255,255,255,0.03);
+}
+
+.jsonRow.isMatch{
+  outline: 1px solid rgba(230,165,32,0.30);
+  outline-offset: -1px;
+}
+
+:root[data-palette="royal_amethyst"] .jsonRow.isMatch{
+  outline-color: rgba(122,63,145,0.30);
+}
+
+.jsonRow.isActiveMatch{
+  background: rgba(230,165,32,0.14);
+}
+
+:root[data-palette="royal_amethyst"] .jsonRow.isActiveMatch{
+  background: rgba(122,63,145,0.14);
+}
+
+.jsonIndent{ display:inline-block; flex: 0 0 auto; }
+.jsonTwisty{
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.jsonTwistyStub{
+  width: 22px;
+  height: 22px;
+  display:inline-block;
+}
+
+.jsonKey{
+  font-weight: 900;
+  color: var(--text);
+  min-width: 70px;
+}
+
+.jsonColon{ color: var(--muted); }
+
+.jsonVal{
+  color: var(--muted);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jsonMeta{
+  color: var(--muted);
+}
+
+.jsonPrim{
+  color: var(--text);
+}
+.jsonPrim.t_string{ color: rgba(255,255,255,0.86); }
+:root[data-theme="light"] .jsonPrim.t_string{ color: rgba(0,0,0,0.78); }
+.jsonPrim.t_number{ color: rgba(122, 206, 255, 0.92); }
+.jsonPrim.t_boolean{ color: rgba(180, 255, 198, 0.95); }
+.jsonPrim.t_object{ color: var(--muted); }
+
+.jsonPathGhost{
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  color: rgba(255,255,255,0.20);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+:root[data-theme="light"] .jsonPathGhost{
+  color: rgba(0,0,0,0.22);
+}
+
+.jsonChildren{
+  margin-left: 0;
+}
+
+.jsonCtxMenu{
+  position: fixed;
+  z-index: 9999;
+  min-width: 200px;
+  background: rgba(15,18,30,0.98);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+  padding: 6px;
+  backdrop-filter: blur(10px);
+}
+:root[data-theme="light"] .jsonCtxMenu{
+  background: rgba(255,255,255,0.98);
+  border: 1px solid rgba(0,0,0,0.10);
+}
+
+.jsonCtxItem{
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 10px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 800;
+}
+.jsonCtxItem:hover{
+  background: rgba(255,255,255,0.06);
+}
+:root[data-theme="light"] .jsonCtxItem:hover{
+  background: rgba(0,0,0,0.05);
+}
+.jsonCtxItem:disabled{
+  opacity: 0.45;
+  cursor: default;
+}
+
+.toastMini{
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9999;
+  background: rgba(15,18,30,0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-weight: 800;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+:root[data-theme="light"] .toastMini{
+  background: rgba(255,255,255,0.96);
+  border: 1px solid rgba(0,0,0,0.12);
+}
+
+
+/* =========================
+   Phase 5: Tabs overview menu
+   ========================= */
+
+.panelHeaderActions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.badgeBtn{
+  cursor:pointer;
+  user-select:none;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+}
+
+.badgeBtn:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.12);
+  color: var(--text);
+}
+
+.badgeBtn:active{
+  transform: translateY(1px);
+}
+
+.badgeCount{
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.tabsOverviewMenu{
+  position: fixed;
+  z-index: 4000;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.tabsOverviewHeader{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+}
+
+.tabsOverviewTitle{
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.tabsOverviewMeta{
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tabsOverviewList{
+  padding: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.tabsOverviewItem{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align:left;
+  cursor:pointer;
+}
+
+.tabsOverviewItem:hover{
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.08);
+}
+
+.tabsOverviewItem.isActive{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.14);
+}
+
+.tabsOverviewMethod{
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.tabsOverviewMethod.m_GET{ border-color: rgba(46, 204, 113, 0.35); color: var(--ok); }
+.tabsOverviewMethod.m_POST{ border-color: rgba(241, 196, 15, 0.35); color: var(--warn); }
+.tabsOverviewMethod.m_PUT{ border-color: rgba(52, 152, 219, 0.35); color: #5bb6ff; }
+.tabsOverviewMethod.m_PATCH{ border-color: rgba(52, 152, 219, 0.35); color: #5bb6ff; }
+.tabsOverviewMethod.m_DELETE{ border-color: rgba(231, 76, 60, 0.35); color: var(--bad); }
+
+.tabsOverviewLabel{
+  flex: 1 1 auto;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabsOverviewDot{
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+
+
+
+/* ---------- Split button + small menus (Postman-like polish) ---------- */
+.btnSplit{
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.btnSplit .btn{
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.btnSplit .btnIcon{
+  width: 40px;
+  padding: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btnSplit .btnIcon svg{
+  width: 16px;
+  height: 16px;
+  opacity: 0.9;
+}
+
+.menu{
+  position: absolute;
+  z-index: 50;
+  min-width: 180px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(16, 24, 40, 0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 16px 44px rgba(0,0,0,0.40);
+}
+
+.menuDown{
+  top: calc(100% + 6px);
+  right: 0;
+}
+
+.menuItem{
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 10px;
+  background: transparent;
+  color: var(--text, rgba(255,255,255,0.92));
+  cursor: pointer;
+}
+
+.menuItem:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+
+/* ---------- Action bar polish: Copy icon split button ---------- */
+.btnSplit{
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.btnSplit .btn{
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.btnSplit .btnIcon{
+  width: 40px;
+  padding: 0;
+  border-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btnSplit .btnIconMain{
+  width: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btnSplit .btnIcon svg,
+.btnSplit .btnIconMain svg{
+  width: 18px;
+  height: 18px;
+  opacity: 0.9;
+}
+
+.btnSplit .btnIcon:hover svg,
+.btnSplit .btnIconMain:hover svg{
+  opacity: 1;
+}
+
+
+/* ---------- URL row spacing polish ---------- */
+.rowUrl{
+  align-items: center;
+}
+
+.rowUrl .input{
+  flex: 1 1 auto;
+  min-width: 420px;
+}
+
+.rowActions{
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 900px){
+  .rowUrl{
+    flex-wrap: wrap;
+  }
+  .rowUrl .input{
+    min-width: 260px;
+    flex: 1 1 100%;
+  }
+}
+
+
+/* ===== Phase 5: Header inline (Label + actions on same row) ===== */
+.row.rowHeader{
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.rowHeader .headerLeft{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 320px;
+}
+.rowHeader .headerActions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.rowHeader .input.inputName{
+  max-width: 420px;
+  min-width: 220px;
+}
+.rowHeader .envBadge{
+  opacity: .9;
+  white-space: nowrap;
+}
+
+
+
+/* ===== Phase 5.5: Environments (selector + resolved preview) ===== */
+.envPill{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(255,255,255,.04);
+  max-width: 360px;
+}
+.envPillLabel{
+  font-size:12px;
+  opacity:.75;
+  letter-spacing:.02em;
+}
+.envSelect{
+  appearance:none;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(0,0,0,.12);
+  color:inherit;
+  border-radius:10px;
+  padding:6px 26px 6px 10px;
+  font-size:12px;
+  line-height:1;
+  cursor:pointer;
+}
+.envPillDot{ opacity:.5; }
+.envPillValue{
+  font-size:12px;
+  opacity:.8;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width: 190px;
+}
+
+.finalUrlRow{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.linkBtn{
+  border:none;
+  background:transparent;
+  color:rgba(255,255,255,.70);
+  font-size:12px;
+  cursor:pointer;
+  padding:0;
+}
+.linkBtn:hover{ color:rgba(255,255,255,.92); text-decoration:underline; }
+
+.resolvedPanel{
+  margin-top:10px;
+  padding:10px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(0,0,0,.10);
+}
+.resolvedGrid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap:10px;
+}
+@media (min-width: 980px){
+  .resolvedGrid{ grid-template-columns: 1fr 1fr 1fr; }
+}
+.resolvedBlock{
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(255,255,255,.03);
+  padding:10px;
+  min-width: 0;
+}
+.resolvedTitle{
+  font-size:12px;
+  opacity:.75;
+  margin-bottom:6px;
+}
+.codeBlock{
+  margin:0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size:12px;
+  line-height:1.4;
+  white-space:pre-wrap;
+  word-break:break-word;
+  max-height:220px;
+  overflow:auto;
+}
+
+/* ===== EnvPanel UX ===== */
+.sidePanelHeaderActions{ display:flex; gap:8px; }
+.btn{ padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.04); color:inherit; cursor:pointer; }
+.btn:hover{ background:rgba(255,255,255,.06); }
+.btnPrimary{ padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.12); color:inherit; cursor:pointer; }
+.btnDanger{ padding:8px 10px; border-radius:10px; border:1px solid rgba(255,80,80,.35); background:rgba(255,80,80,.10); color:inherit; cursor:pointer; }
+.btnDanger:hover{ background:rgba(255,80,80,.16); }
+.panelSection{ margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,.06); }
+.fieldRow{ display:flex; gap:10px; align-items:center; }
+.fieldLabel{ width:80px; font-size:12px; opacity:.75; }
+.select{ min-width:160px; }
+.segmented{ display:flex; gap:8px; margin-top:10px; }
+.segBtn{ flex:1; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03); color:inherit; cursor:pointer; }
+.segBtn.active{ background:rgba(255,255,255,.10); border-color:rgba(255,255,255,.16); }
+.kvGridHead{ display:grid; grid-template-columns: 1fr 1.2fr 34px; gap:10px; font-size:12px; opacity:.65; margin-bottom:6px; }
+.kvRow{ display:grid; grid-template-columns: 1fr 1.2fr 34px; gap:10px; align-items:center; margin-bottom:8px; }
+.kvValueWrap{ display:flex; gap:8px; align-items:center; }
+.miniBtn{ width:34px; height:34px; border-radius:10px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.04); color:inherit; cursor:pointer; }
+.miniBtn:hover{ background:rgba(255,255,255,.06); }
+.miniBtn.danger{ border-color:rgba(255,80,80,.35); background:rgba(255,80,80,.10); }
+.panelFooter{ display:flex; justify-content:flex-end; margin-top:10px; }
+.hintRow{ margin-top:10px; }
+.checkbox{ font-size:12px; opacity:.75; display:flex; gap:8px; align-items:center; }
+.sideHelp{ font-size:12px; opacity:.72; }
+
+.codeRich { white-space: pre-wrap; word-break: break-word; }
+.preWrap { white-space: pre-wrap; }
+
+.varToken{
+  display:inline-block;
+  padding:0 6px;
+  border-radius:999px;
+  font-weight:600;
+  line-height:1.6;
+  margin:0 1px;
+  border:1px solid rgba(255,255,255,0.12);
+}
+
+.varTokenResolved{
+  background: rgba(34,197,94,0.14);
+  border-color: rgba(34,197,94,0.35);
+  color: rgba(214,255,226,0.95);
+}
+
+.varTokenMissing{
+  background: rgba(239,68,68,0.14);
+  border-color: rgba(239,68,68,0.35);
+  color: rgba(255,205,205,0.95);
+}
+
+.varWarning{
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.25);
+}
+
+.varWarningTitle{ font-weight:700; margin-bottom:6px; }
+.varWarningHint{ margin-top:6px; opacity:0.85; font-size:12px; }
+
+.varPills{ display:flex; flex-wrap: wrap; gap:6px; }
+.varPill{
+  padding: 2px 8px;
+  border-radius:999px;
+  font-size:12px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+}
+.varPillMissing{
+  border-color: rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.10);
+}
+
+.resolvedTitleRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom: 6px;
+}
+
+.varMetaPill{
+  padding:2px 8px;
+  border-radius:999px;
+  font-size:12px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+}
+.varMetaPillMissing{
+  border-color: rgba(239,68,68,0.35);
+  background: rgba(239,68,68,0.10);
+}
+
+.resolvedLines{ display:flex; flex-direction:column; gap:6px; }
+.resolvedLine{ display:flex; gap:8px; align-items:baseline; }
+.resolvedKey{ opacity:0.9; }
+.resolvedColon{ opacity:0.5; }
+.resolvedVal{ flex:1; }
+
+.muted{ opacity:0.65; }

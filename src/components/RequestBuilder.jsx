@@ -7,7 +7,7 @@ import AuthEditor, { applyAuthToHeaders } from "./AuthEditor";
 import TestsEditor from "./TestsEditor";
 import DataEditor from "./DataEditor";
 
-import { applyVarsToRequest } from "../utils/vars";
+import { applyVarsToRequest, createVarMeta, metaToPlain, resolveTemplateSegments } from "../utils/vars";
 import { runAssertions } from "../utils/assertions";
 import { pushConsoleEvent } from "../utils/consoleBus";
 import { toCurl, toFetch, toAxios } from "../utils/codegen";
@@ -44,6 +44,57 @@ function buildFinalUrl(baseUrl, params) {
   }
 }
 
+
+
+function buildFinalUrlTemplate(baseUrl, params) {
+  const base = String(baseUrl || "");
+  const rows = (params || []).filter((p) => p && String(p.key || "").trim() !== "");
+  if (!rows.length) return base;
+  const qs = rows.map((p) => `${p.key}=${p.value ?? ""}`).join("&");
+  const hasQ = base.includes("?");
+  if (!hasQ) return `${base}?${qs}`;
+  if (base.endsWith("?") || base.endsWith("&")) return `${base}${qs}`;
+  return `${base}&${qs}`;
+}
+
+function truncateText(str, max = 8000) {
+  const s = String(str ?? "");
+  if (s.length <= max) return s;
+  return s.slice(0, max) + "\n… (truncated)";
+}
+
+function VarSegments({ segments }) {
+  return (
+    <>
+      {(segments || []).map((seg, idx) => {
+        if (seg.t === "var") {
+          const ok = !!seg.resolved;
+          const bg = ok ? "rgba(46, 204, 113, 0.16)" : "rgba(255, 70, 70, 0.16)";
+          const bd = ok ? "rgba(46, 204, 113, 0.38)" : "rgba(255, 70, 70, 0.38)";
+          const fg = ok ? "var(--success)" : "var(--danger)";
+          return (
+            <span
+              key={idx}
+              title={ok ? `{{${seg.name}}}` : `Missing: ${seg.name}`}
+              style={{
+                background: bg,
+                border: `1px solid ${bd}`,
+                color: fg,
+                borderRadius: 999,
+                padding: "0 6px",
+                margin: "0 1px",
+                display: "inline-block",
+              }}
+            >
+              {seg.display}
+            </span>
+          );
+        }
+        return <span key={idx}>{seg.text}</span>;
+      })}
+    </>
+  );
+}
 function suggestName(method, url) {
   try {
     const u = new URL(url);
@@ -81,6 +132,16 @@ function ensureKvRows(arr) {
   return hasBlank ? a : [...a, { key: "", value: "" }];
 }
 
+
+function buildHeadersObject(hdrs) {
+  const obj = {};
+  for (const h of hdrs || []) {
+    const k = (h.key || "").trim();
+    if (!k) continue;
+    obj[k] = h.value ?? "";
+  }
+  return obj;
+}
 function previewHeaderRows(headers, max = 6) {
   const list = Array.isArray(headers) ? headers : [];
   const clean = list
@@ -249,8 +310,15 @@ export default function RequestBuilder({
   const [tab, setTab] = useState("params");
   const [mode, setMode] = useState(initial?.mode || "direct");
 
+  // Phase 5: Resolve preview (missing vars + colored tokens)
+  const [showResolvePreview, setShowResolvePreview] = useState(false);
+  const [resolveTab, setResolveTab] = useState("url");
+
   // Copy as
   const [copyFormat, setCopyFormat] = useState("curl");
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const copySplitRef = useRef(null);
+  const copyMenuRef = useRef(null);
   const [copyMsg, setCopyMsg] = useState("");
   const copyMsgTimerRef = useRef(null);
 
@@ -392,14 +460,17 @@ export default function RequestBuilder({
     preRequestScript,
   ]);
 
-  const finalDraft = useMemo(() => {
-    return applyVarsToRequest(
-      { method, url, params, headers, body, auth, mode, preRequestScript },
-      envVars
-    );
-  }, [method, url, params, headers, body, auth, mode, preRequestScript, envVars]);
+  const { finalDraft, varMeta } = useMemo(() => {
+  const meta = createVarMeta();
+  const resolved = applyVarsToRequest(
+    { method, url, params, headers, body, auth, mode, preRequestScript, tests, testScript },
+    envVars,
+    meta
+  );
+  return { finalDraft: resolved, varMeta: metaToPlain(meta) };
+}, [method, url, params, headers, body, auth, mode, preRequestScript, tests, testScript, envVars]);
 
-  const finalUrlPreview = useMemo(
+const finalUrlPreview = useMemo(
     () => buildFinalUrl(finalDraft.url, finalDraft.params),
     [finalDraft]
   );
@@ -410,50 +481,46 @@ export default function RequestBuilder({
     return `Env: ${envName}${baseUrl ? ` • ${baseUrl}` : ""}`;
   }, [envName, envVars]);
 
-  const buildHeadersObject = (hdrs) => {
-    const obj = {};
-    for (const h of hdrs || []) {
-      const k = (h.key || "").trim();
-      if (!k) continue;
-      obj[k] = h.value ?? "";
-    }
-    return obj;
-  };
 
-  const validate = () => {
-    const urlAfterVars = (finalDraft.url || "").trim();
-    if (!urlAfterVars) {
-      onResponse?.({
-        ok: false,
-        timeMs: 0,
-        errorName: "ValidationError",
-        errorMessage: "URL is required",
+  // Resolve preview helpers (missing vars + colored tokens)
+  const missingKeys = varMeta?.missingKeys || [];
+  const usedKeys = varMeta?.usedKeys || [];
+  const resolvedKeys = varMeta?.resolvedKeys || [];
+  const missingCount = missingKeys.length;
+
+  const urlTemplate = useMemo(() => buildFinalUrlTemplate(url, params), [url, params]);
+  const urlSegments = useMemo(() => resolveTemplateSegments(urlTemplate, envVars), [urlTemplate, envVars]);
+
+  const headersPreview = useMemo(() => {
+    const rows = [];
+    for (const h of headers || []) {
+      const k = String(h?.key || "");
+      const v = String(h?.value || "");
+      if (!k.trim() && !v.trim()) continue;
+      rows.push({
+        keySegments: resolveTemplateSegments(k, envVars),
+        valueSegments: resolveTemplateSegments(v, envVars),
       });
-      return false;
     }
+    return rows;
+  }, [headers, envVars]);
 
-    if (!["GET", "HEAD"].includes(method)) {
-      const b = (finalDraft.body || "").trim();
-      if (b.length > 0) {
-        try {
-          JSON.parse(b);
-          setBodyError("");
-        } catch {
-          setBodyError("Invalid JSON body");
-          onResponse?.({
-            ok: false,
-            timeMs: 0,
-            errorName: "ValidationError",
-            errorMessage: "Fix invalid JSON before sending/saving",
-          });
-          return false;
-        }
-      }
+  const bodyPreviewText = useMemo(() => {
+    if (body == null) return "";
+    if (typeof body === "string") return truncateText(body, 8000);
+    try {
+      return truncateText(JSON.stringify(body, null, 2), 8000);
+    } catch {
+      return truncateText(String(body), 8000);
     }
-    return true;
-  };
+  }, [body]);
 
-  const validateForCopy = () => {
+  const bodySegments = useMemo(
+    () => resolveTemplateSegments(bodyPreviewText, envVars),
+    [bodyPreviewText, envVars]
+  );
+
+const validateForCopy = () => {
     const urlAfterVars = (finalDraft.url || "").trim();
     if (!urlAfterVars) {
       setCopyMessage("Cannot copy: URL is empty");
@@ -487,22 +554,23 @@ export default function RequestBuilder({
     };
   }
 
-  const copyAs = async () => {
+  const copyAs = async (formatOverride) => {
     if (!validateForCopy()) return;
+    const fmt = formatOverride || copyFormat;
 
     try {
       const input = buildCodegenInput(finalDraft);
 
       let snippet = "";
-      if (copyFormat === "curl") snippet = toCurl(input);
-      if (copyFormat === "fetch") snippet = toFetch(input);
-      if (copyFormat === "axios") snippet = toAxios(input);
+      if (fmt === "curl") snippet = toCurl(input);
+      if (fmt === "fetch") snippet = toFetch(input);
+      if (fmt === "axios") snippet = toAxios(input);
 
       await copyToClipboard(snippet);
 
-      if (copyFormat === "curl") setCopyMessage("Copied as cURL");
-      if (copyFormat === "fetch") setCopyMessage("Copied as Fetch");
-      if (copyFormat === "axios") setCopyMessage("Copied as Axios");
+      if (fmt === "curl") setCopyMessage("Copied as cURL");
+      if (fmt === "fetch") setCopyMessage("Copied as Fetch");
+      if (fmt === "axios") setCopyMessage("Copied as Axios");
     } catch {
       setCopyMessage("Copy failed");
     }
@@ -591,7 +659,7 @@ export default function RequestBuilder({
 
     try {
       // 1) run pre-request script first (can mutate draft)
-      const baseDraft = { method, url, params, headers, body, auth, mode };
+      const baseDraft = { method, url, params, headers, body, auth, mode, tests, testScript };
 
       const pre = await runPreRequest(traceId, baseDraft);
       if (!pre.ok) {
@@ -607,7 +675,7 @@ export default function RequestBuilder({
       }
 
       // 2) apply env vars to the (possibly modified) draft
-      const draftAfterScript = pre.draft;
+      const draftAfterScript = { ...pre.draft, tests, testScript };
       const draftResolved = applyVarsToRequest(draftAfterScript, envVars);
 
       const finalUrl = buildFinalUrl(draftResolved.url, draftResolved.params);
@@ -696,13 +764,13 @@ export default function RequestBuilder({
       }
 
       const testReport = runAssertions({
-        tests,
+        tests: draftResolved.tests || tests,
         response: { status: resStatus, timeMs, json: parsedJson, headers: resHeaders },
       });
 
       // ✅ Phase 4: JS test script (Safe mode via Web Worker)
       let scriptTestReport = null;
-      const script = String(testScript || "").trim();
+      const script = String(draftResolved.testScript ?? testScript ?? "").trim();
       if (script) {
         scriptTestReport = await runTestScript({
           script,
@@ -865,6 +933,28 @@ export default function RequestBuilder({
       preRequestScript,
     });
   };
+
+  // copyMenuOutsideClick: close Copy menu on outside click / ESC
+  useEffect(() => {
+    function onDown(e) {
+      if (!copyMenuOpen) return;
+      const menuEl = copyMenuRef.current;
+      const splitEl = copySplitRef.current;
+      if (menuEl && menuEl.contains(e.target)) return;
+      if (splitEl && splitEl.contains(e.target)) return;
+      setCopyMenuOpen(false);
+    }
+    function onKey(e) {
+      if (!copyMenuOpen) return;
+      if (e.key === "Escape") setCopyMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [copyMenuOpen]);
 
   // ----------------------------
   // Phase 4.2.5: Import + preview + Save to collections
@@ -1364,14 +1454,100 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
         </div>
       ) : null}
 
-      <div className="row">
-        <input
-          className="input"
+      <div className="row rowHeader">
+        <div className="headerLeft">
+          <input
+          className="input inputName"
           value={requestName}
           onChange={(e) => setRequestName(e.target.value)}
-          placeholder="Request name"
+          placeholder="Label (optional)"
         />
-        <span className="badge">{envBadge}</span>
+          <span className="envBadge">{envBadge}</span>
+        </div>
+
+        <div className="headerActions">
+                    <button className="btn btnSm" onClick={openImport} disabled={loading} title="Import a request snippet">
+                      Import
+                    </button>
+          
+                    <div className="btnSplit" ref={copySplitRef}>
+                      <button
+                        className="btn btnSm btnIconMain"
+                        onClick={() => copyAs()}
+                        disabled={loading}
+                        title={`Copy (${copyFormat})`}
+                        type="button"
+                        aria-label={`Copy (${copyFormat})`}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M8 9l-3 3 3 3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M16 9l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M13 7l-2 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                        </svg>
+                      </button>
+          
+                      <button
+                        className="btn btnSm btnIcon"
+                        type="button"
+                        onClick={() => setCopyMenuOpen((v) => !v)}
+                        disabled={loading}
+                        aria-label="Copy format"
+                        title="Copy format"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      </button>
+          
+                      {copyMenuOpen && (
+                        <div className="menu menuDown" ref={copyMenuRef} role="menu">
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("curl");
+                              copyAs("curl");
+                            }}
+                          >
+                            Copy as cURL
+                          </button>
+          
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("fetch");
+                              copyAs("fetch");
+                            }}
+                          >
+                            Copy as Fetch
+                          </button>
+          
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("axios");
+                              copyAs("axios");
+                            }}
+                          >
+                            Copy as Axios
+                          </button>
+                        </div>
+                      )}
+                    </div>
+          
+                    <button className="btn btnSm" onClick={saveRequest} disabled={loading} title="Save request">
+                      Save
+                    </button>
+          
+                    <button className="btn btnDanger" onClick={cancelRequest} disabled={!loading} title="Cancel in-flight request">
+                      Cancel
+                    </button>
+        </div>
       </div>
 
       {saveError ? (
@@ -1386,7 +1562,7 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
         </div>
       ) : null}
 
-      <div className="row">
+      <div className="row rowUrl">
         <select
           className="select"
           style={{ maxWidth: 120 }}
@@ -1411,41 +1587,58 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           {loading ? "Sending..." : "Send"}
         </button>
 
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn btnSm" onClick={openImport} disabled={loading}>
-            Import
-          </button>
+        
 
-          <select
-            className="select"
-            value={copyFormat}
-            onChange={(e) => setCopyFormat(e.target.value)}
-            style={{ maxWidth: 160 }}
-            disabled={loading}
-            title="Copy as"
-          >
-            <option value="curl">Copy as cURL</option>
-            <option value="fetch">Copy as Fetch</option>
-            <option value="axios">Copy as Axios</option>
-          </select>
-
-          <button className="btn btnSm" onClick={copyAs} disabled={loading}>
-            Copy
-          </button>
-        </div>
-
-        <button className="btn btnSm" onClick={saveRequest} disabled={loading}>
-          Save
-        </button>
-
-        <button className="btn btnDanger" onClick={cancelRequest} disabled={!loading}>
-          Cancel
-        </button>
       </div>
 
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="smallMuted">
-          Final URL: <span style={{ fontFamily: "var(--mono)" }}>{finalUrlPreview}</span>
+        <div className="smallMuted" style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <span style={{ whiteSpace: "nowrap" }}>Final URL:</span>
+          <span style={{ fontFamily: "var(--mono)", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {finalUrlPreview}
+          </span>
+
+          <button
+            type="button"
+            className="btn btnSm btnIcon"
+            onClick={() => {
+              setResolveTab("url");
+              setShowResolvePreview((v) => !v);
+            }}
+            title="Resolve preview (vars)"
+            aria-label="Resolve preview"
+            style={{ gap: 6 }}
+          >
+            <span aria-hidden="true">{"</>"}</span>
+            <span>Resolve</span>
+            {missingCount > 0 ? (
+              <span
+                className="badge"
+                style={{
+                  marginLeft: 6,
+                  background: "rgba(255, 70, 70, 0.15)",
+                  border: "1px solid rgba(255, 70, 70, 0.35)",
+                  color: "var(--danger)",
+                }}
+                title={`Missing variables: ${missingKeys.join(", ")}`}
+              >
+                {missingCount}
+              </span>
+            ) : usedKeys.length ? (
+              <span
+                className="badge"
+                style={{
+                  marginLeft: 6,
+                  background: "rgba(46, 204, 113, 0.14)",
+                  border: "1px solid rgba(46, 204, 113, 0.35)",
+                  color: "var(--success)",
+                }}
+                title={`Resolved variables: ${resolvedKeys.length}`}
+              >
+                ✓
+              </span>
+            ) : null}
+          </button>
         </div>
 
         <div className="tabs">
@@ -1463,6 +1656,122 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           </button>
         </div>
       </div>
+
+{showResolvePreview ? (
+  <div className="card" style={{ padding: 12, marginTop: 10 }}>
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+        <div style={{ fontWeight: 800, fontSize: 13 }}>Resolve preview</div>
+        {missingCount > 0 ? (
+          <span
+            className="badge"
+            style={{
+              background: "rgba(255, 70, 70, 0.15)",
+              border: "1px solid rgba(255, 70, 70, 0.35)",
+              color: "var(--danger)",
+            }}
+          >
+            Missing: {missingCount}
+          </span>
+        ) : usedKeys.length ? (
+          <span
+            className="badge"
+            style={{
+              background: "rgba(46, 204, 113, 0.14)",
+              border: "1px solid rgba(46, 204, 113, 0.35)",
+              color: "var(--success)",
+            }}
+          >
+            All set
+          </span>
+        ) : (
+          <span className="smallMuted">No variables used</span>
+        )}
+      </div>
+
+      <button className="btn btnSm" type="button" onClick={() => setShowResolvePreview(false)}>
+        Close
+      </button>
+    </div>
+
+    <div className="tabs" style={{ marginTop: 10 }}>
+      <button
+        className={`tab ${resolveTab === "url" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("url")}
+      >
+        URL
+      </button>
+      <button
+        className={`tab ${resolveTab === "headers" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("headers")}
+      >
+        Headers
+      </button>
+      <button
+        className={`tab ${resolveTab === "body" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("body")}
+      >
+        Body
+      </button>
+    </div>
+
+    <div style={{ marginTop: 10 }}>
+      {resolveTab === "url" ? (
+        <div className="monoBox">
+          <VarSegments segments={urlSegments} />
+        </div>
+      ) : resolveTab === "headers" ? (
+        <div className="monoBox">
+          {headersPreview.length ? (
+            headersPreview.map((h, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                <span style={{ opacity: 0.9 }}>
+                  <VarSegments segments={h.keySegments} />
+                </span>
+                <span style={{ opacity: 0.6 }}>:</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <VarSegments segments={h.valueSegments} />
+                </span>
+              </div>
+            ))
+          ) : (
+            <span className="smallMuted">No headers</span>
+          )}
+        </div>
+      ) : (
+        <div className="monoBox">
+          {bodyPreviewText ? <VarSegments segments={bodySegments} /> : <span className="smallMuted">No body</span>}
+        </div>
+      )}
+    </div>
+
+    {missingCount > 0 ? (
+      <div style={{ marginTop: 10 }}>
+        <div className="smallMuted">Missing variables</div>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+          {missingKeys.map((k) => (
+            <span
+              key={k}
+              style={{
+                fontFamily: "var(--mono)",
+                background: "rgba(255, 70, 70, 0.15)",
+                border: "1px solid rgba(255, 70, 70, 0.35)",
+                color: "var(--danger)",
+                borderRadius: 999,
+                padding: "2px 8px",
+              }}
+            >
+              {`{{${k}}}`}
+            </span>
+          ))}
+        </div>
+      </div>
+    ) : null}
+  </div>
+) : null}
 
       <div className="tabs">
         <button className={`tab ${tab === "params" ? "tabActive" : ""}`} onClick={() => setTab("params")}>
