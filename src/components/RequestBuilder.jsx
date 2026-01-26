@@ -1,18 +1,20 @@
 // src/components/RequestBuilder.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import HeadersEditor from "./HeadersEditor";
 import BodyEditor from "./BodyEditor";
 import QueryParamsEditor from "./QueryParamsEditor";
 import AuthEditor, { applyAuthToHeaders } from "./AuthEditor";
 import TestsEditor from "./TestsEditor";
 import DataEditor from "./DataEditor";
+import DocsEditor from "./DocsEditor";
 
-import { applyVarsToRequest } from "../utils/vars";
+import { applyVarsToRequest, createVarMeta, metaToPlain, resolveTemplateSegments } from "../utils/vars";
 import { runAssertions } from "../utils/assertions";
 import { pushConsoleEvent } from "../utils/consoleBus";
 import { toCurl, toFetch, toAxios } from "../utils/codegen";
 import { runPreRequestScript } from "../utils/scriptRuntime";
 import { importSnippet } from "../utils/snippetImport";
+import { getFile, fileToBase64 } from "../utils/fileCache";
 import {
   loadCollectionTrees,
   upsertCollectionTreeRequestUnderFolder,
@@ -22,6 +24,20 @@ import {
 import { runTestScriptSafe as runTestScript } from "../utils/testRuntimeSafe";
 
 const PROXY_URL = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
+
+function getCookieJarId() {
+  // Stable id so the proxy can persist cookies per user session
+  try {
+    const k = "bhejo_cookieJarId";
+    const existing = localStorage.getItem(k);
+    if (existing) return existing;
+    const id = `jar_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(k, id);
+    return id;
+  } catch {
+    return "default";
+  }
+}
 
 function uuid(prefix = "id") {
   return (
@@ -44,6 +60,57 @@ function buildFinalUrl(baseUrl, params) {
   }
 }
 
+
+
+function buildFinalUrlTemplate(baseUrl, params) {
+  const base = String(baseUrl || "");
+  const rows = (params || []).filter((p) => p && String(p.key || "").trim() !== "");
+  if (!rows.length) return base;
+  const qs = rows.map((p) => `${p.key}=${p.value ?? ""}`).join("&");
+  const hasQ = base.includes("?");
+  if (!hasQ) return `${base}?${qs}`;
+  if (base.endsWith("?") || base.endsWith("&")) return `${base}${qs}`;
+  return `${base}&${qs}`;
+}
+
+function truncateText(str, max = 8000) {
+  const s = String(str ?? "");
+  if (s.length <= max) return s;
+  return s.slice(0, max) + "\n… (truncated)";
+}
+
+function VarSegments({ segments }) {
+  return (
+    <>
+      {(segments || []).map((seg, idx) => {
+        if (seg.t === "var") {
+          const ok = !!seg.resolved;
+          const bg = ok ? "rgba(46, 204, 113, 0.16)" : "rgba(255, 70, 70, 0.16)";
+          const bd = ok ? "rgba(46, 204, 113, 0.38)" : "rgba(255, 70, 70, 0.38)";
+          const fg = ok ? "var(--success)" : "var(--danger)";
+          return (
+            <span
+              key={idx}
+              title={ok ? `{{${seg.name}}}` : `Missing: ${seg.name}`}
+              style={{
+                background: bg,
+                border: `1px solid ${bd}`,
+                color: fg,
+                borderRadius: 999,
+                padding: "0 6px",
+                margin: "0 1px",
+                display: "inline-block",
+              }}
+            >
+              {seg.display}
+            </span>
+          );
+        }
+        return <span key={idx}>{seg.text}</span>;
+      })}
+    </>
+  );
+}
 function suggestName(method, url) {
   try {
     const u = new URL(url);
@@ -81,6 +148,85 @@ function ensureKvRows(arr) {
   return hasBlank ? a : [...a, { key: "", value: "" }];
 }
 
+
+function ensureKvRowsEnabled(arr, extra = {}) {
+  const a = Array.isArray(arr) ? arr : [];
+  const norm = a.map((r) => ({
+    key: r?.key ?? "",
+    value: r?.value ?? "",
+    enabled: r?.enabled !== false,
+    ...extra,
+    ...(r || {}),
+  }));
+
+  if (!norm.length) return [{ key: "", value: "", enabled: true, ...extra }];
+
+  const hasBlank = norm.some((x) => !String(x?.key || "") && !String(x?.value || ""));
+  return hasBlank ? norm : [...norm, { key: "", value: "", enabled: true, ...extra }];
+}
+
+function ensureFormDataRows(arr) {
+  const a = Array.isArray(arr) ? arr : [];
+  const norm = a.map((r) => {
+    const kind = String(r?.kind || "text").toLowerCase();
+    return {
+      key: r?.key ?? "",
+      value: r?.value ?? "",
+      enabled: r?.enabled !== false,
+      kind,
+      fileRefId: r?.fileRefId || "",
+      fileName: r?.fileName || "",
+      fileType: r?.fileType || "",
+      fileSize: r?.fileSize || 0,
+      ...(r || {}),
+    };
+  });
+
+  if (!norm.length) return [{ key: "", value: "", enabled: true, kind: "text" }];
+
+  const hasBlank = norm.some((x) => !String(x?.key || "") && !String(x?.value || "") && !String(x?.fileName || ""));
+  return hasBlank ? norm : [...norm, { key: "", value: "", enabled: true, kind: "text" }];
+}
+
+function encodeFormUrl(rows) {
+  const sp = new URLSearchParams();
+  for (const r of rows || []) {
+    if (!r || r.enabled === false) continue;
+    const k = String(r.key || "").trim();
+    if (!k) continue;
+    sp.append(k, r.value ?? "");
+  }
+  return sp.toString();
+}
+
+function deleteHeaderCI(obj, headerName) {
+  const out = { ...(obj || {}) };
+  const target = String(headerName || "").toLowerCase();
+  for (const k of Object.keys(out)) {
+    if (k.toLowerCase() === target) delete out[k];
+  }
+  return out;
+}
+
+
+function headersObjectToRows(obj) {
+  const out = [];
+  const o = obj && typeof obj === "object" ? obj : {};
+  for (const [k, v] of Object.entries(o)) {
+    out.push({ key: k, value: String(v ?? ""), enabled: true });
+  }
+  return out.length ? out : [{ key: "", value: "", enabled: true }];
+}
+
+function buildHeadersObject(hdrs) {
+  const obj = {};
+  for (const h of hdrs || []) {
+    const k = (h.key || "").trim();
+    if (!k) continue;
+    obj[k] = h.value ?? "";
+  }
+  return obj;
+}
 function previewHeaderRows(headers, max = 6) {
   const list = Array.isArray(headers) ? headers : [];
   const clean = list
@@ -204,7 +350,12 @@ export default function RequestBuilder({
   onSaveHistory,
   onSaveRequest,
   envName,
+  envNames = [],
+  setEnvName = () => {},
   envVars,
+
+  // Phase 6: open specific example (from Collections tree)
+  initialActiveExampleId,
 
   // NEW: emit draft to parent (for Postman-like request tabs)
   onDraftChange,
@@ -220,6 +371,11 @@ export default function RequestBuilder({
 
   const [body, setBody] = useState(initial?.body || "");
   const [bodyError, setBodyError] = useState("");
+
+  const [bodyMode, setBodyMode] = useState(initial?.bodyMode || "json");
+  const [bodyFormUrl, setBodyFormUrl] = useState(ensureKvRowsEnabled(initial?.bodyFormUrl));
+  const [bodyFormData, setBodyFormData] = useState(ensureFormDataRows(initial?.bodyFormData));
+
 
   const [auth, setAuth] = useState(
     initial?.auth || {
@@ -240,7 +396,124 @@ export default function RequestBuilder({
   // Phase 4: pre-request script
   const [preRequestScript, setPreRequestScript] = useState(initial?.preRequestScript || "");
 
+  // Phase 6: Documentation + Examples (Postman-like)
+  const [docText, setDocText] = useState(initial?.docText || initial?.docs?.text || "");
+  const [examples, setExamples] = useState(Array.isArray(initial?.examples) ? initial.examples : []);
+  const [defaultExampleId, setDefaultExampleId] = useState(initial?.defaultExampleId || initial?.docs?.defaultExampleId || null);
+  const lastExchangeRef = useRef(null);
+
   const [requestName, setRequestName] = useState("");
+
+  // Breadcrumb (Postman-like) built from CollectionsPanel __path meta
+  const breadcrumb = useMemo(() => {
+    const p = initial?.__path || {};
+    const cid = p.collectionId || null;
+
+    const getCollectionLabel = () => {
+      if (!cid) return null;
+      try {
+        const trees = loadCollectionTrees();
+        const found = Array.isArray(trees) ? trees.find((t) => String(t?.id) === String(cid)) : null;
+        const name = (found?.name || "").trim();
+        return name || null;
+      } catch {
+        return null;
+      }
+    };
+
+    const ensureCollectionPrefix = (items) => {
+      const list = Array.isArray(items) ? items.filter(Boolean) : [];
+      if (!list.length) return list;
+
+      const colLabel = getCollectionLabel();
+      if (!colLabel) return list;
+
+      const first = list[0] || null;
+      const firstType = String(first?.type || "").toLowerCase();
+      const firstLabel = String(first?.label || "").trim();
+
+      // If already starts with collection label (or explicitly typed), leave as-is
+      if (firstType === "collection") return list;
+      if (firstLabel && firstLabel === colLabel) {
+        return [{ ...first, type: "collection", collectionId: cid }, ...list.slice(1)];
+      }
+
+      // Otherwise prefix with collection segment
+      return [
+        {
+          type: "collection",
+          label: colLabel,
+          collectionId: cid,
+          nodeId: "root",
+        },
+        ...list,
+      ];
+    };
+
+    // Preferred: __path.meta emitted by CollectionsPanel (has nodeIds)
+    const meta = Array.isArray(p.meta) ? p.meta : null;
+    if (meta && meta.length) {
+      const items = meta.map((x) => ({ ...x, collectionId: x?.collectionId || cid || null }));
+
+      // Replace last segment with editable request name
+      const last = items[items.length - 1] || null;
+      if (last) {
+        items[items.length - 1] = {
+          ...last,
+          type: "request",
+          label: (requestName || last.label || "").trim() || "Request",
+        };
+      }
+
+      return ensureCollectionPrefix(items);
+    }
+
+    // Fallback: __path.segments (labels only)
+    const segs = Array.isArray(p.segments) ? p.segments.filter(Boolean).map((s) => String(s)) : [];
+    if (segs.length) {
+      const colLabel = getCollectionLabel();
+
+      // If segments don't include collection name, prefix it
+      const segsWithCol =
+        colLabel && segs[0] !== colLabel ? [colLabel, ...segs] : segs;
+
+      const items = segsWithCol.map((label, idx) => {
+        const isLast = idx === segsWithCol.length - 1;
+        const isFirst = idx === 0;
+        return {
+          type: isFirst ? "collection" : isLast ? "request" : "folder",
+          label,
+          collectionId: cid,
+          nodeId: null,
+        };
+      });
+
+      // Ensure last is editable request name
+      const last = items[items.length - 1] || null;
+      if (last) {
+        items[items.length - 1] = {
+          ...last,
+          type: "request",
+          label: (requestName || last.label || "").trim() || "Request",
+        };
+      }
+
+      return items;
+    }
+
+    return [];
+  }, [initial, requestName]);
+
+  const crumbText = useMemo(() => breadcrumb.map((b) => b.label).filter(Boolean).join(" / "), [breadcrumb]);
+
+  const navigateCrumb = (item) => {
+    if (!item) return;
+    const cid = item.collectionId || initial?.__path?.collectionId || null;
+    if (!cid) return;
+    const nodeId = item.type === "collection" ? null : item.nodeId || null;
+    window.dispatchEvent(new CustomEvent("bhejo:navigate", { detail: { collectionId: cid, nodeId } }));
+  };
+      
   const [saveError, setSaveError] = useState("");
 
   const [loading, setLoading] = useState(false);
@@ -249,8 +522,15 @@ export default function RequestBuilder({
   const [tab, setTab] = useState("params");
   const [mode, setMode] = useState(initial?.mode || "direct");
 
+  // Phase 5: Resolve preview (missing vars + colored tokens)
+  const [showResolvePreview, setShowResolvePreview] = useState(false);
+  const [resolveTab, setResolveTab] = useState("url");
+
   // Copy as
   const [copyFormat, setCopyFormat] = useState("curl");
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  const copySplitRef = useRef(null);
+  const copyMenuRef = useRef(null);
   const [copyMsg, setCopyMsg] = useState("");
   const copyMsgTimerRef = useRef(null);
 
@@ -289,6 +569,22 @@ export default function RequestBuilder({
     setParams(initial.params?.length ? initial.params : [{ key: "", value: "" }]);
     setHeaders(initial.headers?.length ? initial.headers : [{ key: "", value: "" }]);
     setBody(initial.body || "");
+    // Body modes (Postman-like)
+    const importedBody = String(initial.body || "");
+    const hasBodyMode = !!initial.bodyMode;
+    if (hasBodyMode) {
+      setBodyMode(initial.bodyMode || "json");
+    } else {
+      // Best-effort: if body parses as JSON, keep json else raw text
+      const t = importedBody.trim();
+      if (!t) setBodyMode("json");
+      else {
+        try { JSON.parse(t); setBodyMode("json"); }
+        catch { setBodyMode("text"); }
+      }
+    }
+    setBodyFormUrl(ensureKvRowsEnabled(initial.bodyFormUrl));
+    setBodyFormData(ensureFormDataRows(initial.bodyFormData));
     setAuth(
       initial.auth || {
         type: "none",
@@ -324,6 +620,9 @@ export default function RequestBuilder({
         params: initial.params?.length ? initial.params : [{ key: "", value: "" }],
         headers: initial.headers?.length ? initial.headers : [{ key: "", value: "" }],
         body: initial.body || "",
+        bodyMode: initial.bodyMode || (String(initial.body || "").trim() ? (() => { try { JSON.parse(String(initial.body || "")); return "json"; } catch { return "text"; } })() : "json"),
+        bodyFormUrl: ensureKvRowsEnabled(initial.bodyFormUrl),
+        bodyFormData: ensureFormDataRows(initial.bodyFormData),
         auth:
           initial.auth || {
             type: "none",
@@ -338,6 +637,9 @@ export default function RequestBuilder({
         dataRows: Array.isArray(initial.dataRows) ? initial.dataRows : [],
         mode: initial.mode || "direct",
         preRequestScript: initial.preRequestScript || "",
+        docText: initial?.docText || initial?.docs?.text || "",
+        examples: Array.isArray(initial?.examples) ? initial.examples : [],
+        defaultExampleId: initial?.defaultExampleId || initial?.docs?.defaultExampleId || null,
         savedAt: initial.savedAt || new Date().toISOString(),
       },
       { reason: "init" }
@@ -366,12 +668,18 @@ export default function RequestBuilder({
         params,
         headers,
         body,
+        bodyMode,
+        bodyFormUrl,
+        bodyFormData,
         auth,
         tests,
         testScript,
         dataRows,
         mode,
         preRequestScript,
+        docText,
+        examples,
+        defaultExampleId,
         savedAt: initial?.savedAt || new Date().toISOString(),
       },
       { reason: "edit" }
@@ -384,22 +692,34 @@ export default function RequestBuilder({
     params,
     headers,
     body,
+    bodyMode,
+    bodyFormUrl,
+    bodyFormData,
     auth,
     tests,
     testScript,
     dataRows,
     mode,
     preRequestScript,
+    docText,
+    examples,
+    defaultExampleId,
   ]);
 
-  const finalDraft = useMemo(() => {
-    return applyVarsToRequest(
-      { method, url, params, headers, body, auth, mode, preRequestScript },
-      envVars
-    );
-  }, [method, url, params, headers, body, auth, mode, preRequestScript, envVars]);
+  const { finalDraft, varMeta } = useMemo(() => {
+  const meta = createVarMeta();
+  const resolved = applyVarsToRequest(
+    { method, url, params, headers, body, bodyMode, bodyFormUrl, bodyFormData, auth, mode, preRequestScript, tests, testScript },
+    envVars,
 
-  const finalUrlPreview = useMemo(
+  // Phase 6: open specific example (from Collections tree)
+  initialActiveExampleId,
+    meta
+  );
+  return { finalDraft: resolved, varMeta: metaToPlain(meta) };
+}, [method, url, params, headers, body, bodyMode, bodyFormUrl, bodyFormData, auth, mode, preRequestScript, tests, testScript, envVars]);
+
+const finalUrlPreview = useMemo(
     () => buildFinalUrl(finalDraft.url, finalDraft.params),
     [finalDraft]
   );
@@ -407,102 +727,212 @@ export default function RequestBuilder({
   const envBadge = useMemo(() => {
     const v = envVars || {};
     const baseUrl = (v.baseUrl || "").trim();
-    return `Env: ${envName}${baseUrl ? ` • ${baseUrl}` : ""}`;
+    return { envName, baseUrl };
   }, [envName, envVars]);
 
-  const buildHeadersObject = (hdrs) => {
-    const obj = {};
-    for (const h of hdrs || []) {
-      const k = (h.key || "").trim();
-      if (!k) continue;
-      obj[k] = h.value ?? "";
-    }
-    return obj;
-  };
 
-  const validate = () => {
-    const urlAfterVars = (finalDraft.url || "").trim();
-    if (!urlAfterVars) {
-      onResponse?.({
-        ok: false,
-        timeMs: 0,
-        errorName: "ValidationError",
-        errorMessage: "URL is required",
+  // Resolve preview helpers (missing vars + colored tokens)
+  const missingKeys = varMeta?.missingKeys || [];
+  const usedKeys = varMeta?.usedKeys || [];
+  const resolvedKeys = varMeta?.resolvedKeys || [];
+  const missingCount = missingKeys.length;
+
+  const urlTemplate = useMemo(() => buildFinalUrlTemplate(url, params), [url, params]);
+  const urlSegments = useMemo(() => resolveTemplateSegments(urlTemplate, envVars), [urlTemplate, envVars]);
+
+  const headersPreview = useMemo(() => {
+    const rows = [];
+    for (const h of headers || []) {
+      const k = String(h?.key || "");
+      const v = String(h?.value || "");
+      if (!k.trim() && !v.trim()) continue;
+      rows.push({
+        keySegments: resolveTemplateSegments(k, envVars),
+        valueSegments: resolveTemplateSegments(v, envVars),
       });
-      return false;
+    }
+    return rows;
+  }, [headers, envVars]);
+
+  const bodyPreviewText = useMemo(() => {
+    const m = String(bodyMode || "json").toLowerCase();
+
+    if (m === "formurl") {
+      const enc = encodeFormUrl(bodyFormUrl);
+      return truncateText(enc || "", 8000);
     }
 
-    if (!["GET", "HEAD"].includes(method)) {
-      const b = (finalDraft.body || "").trim();
-      if (b.length > 0) {
-        try {
-          JSON.parse(b);
-          setBodyError("");
-        } catch {
-          setBodyError("Invalid JSON body");
-          onResponse?.({
-            ok: false,
-            timeMs: 0,
-            errorName: "ValidationError",
-            errorMessage: "Fix invalid JSON before sending/saving",
-          });
-          return false;
+    if (m === "formdata") {
+      const lines = [];
+      for (const r of bodyFormData || []) {
+        if (!r || r.enabled === false) continue;
+        const k = String(r.key || "").trim();
+        if (!k) continue;
+        const kind = String(r.kind || "text").toLowerCase();
+        if (kind === "file") {
+          const fn = r.fileName || "file";
+          lines.push(`${k} = <file: ${fn}>`);
+        } else {
+          lines.push(`${k} = ${String(r.value ?? "")}`);
         }
       }
+      return truncateText(lines.join("\n"), 8000);
     }
-    return true;
-  };
 
-  const validateForCopy = () => {
+    // json/text use `body` string (or object)
+    if (body == null) return "";
+    if (typeof body === "string") return truncateText(body, 8000);
+    try {
+      return truncateText(JSON.stringify(body, null, 2), 8000);
+    } catch {
+      return truncateText(String(body), 8000);
+    }
+  }, [bodyMode, body, bodyFormUrl, bodyFormData]);
+
+  const bodySegments = useMemo(
+    () => resolveTemplateSegments(bodyPreviewText, envVars),
+    [bodyPreviewText, envVars]
+  );
+
+const validateForCopy = () => {
     const urlAfterVars = (finalDraft.url || "").trim();
     if (!urlAfterVars) {
       setCopyMessage("Cannot copy: URL is empty");
       return false;
     }
+    const bm = String(bodyMode || "json").toLowerCase();
+    if (bm === "formdata" && (bodyFormData || []).some((r) => r && r.enabled !== false && String(r.key || "").trim())) {
+      setCopyMessage("Cannot copy: multipart form-data codegen not supported yet");
+      return false;
+    }
+    return true;
+  };
+
+  const validate = () => {
+    const u = String(url || "").trim();
+    if (!u) {
+      setSaveError("URL cannot be empty.");
+      return false;
+    }
+
+    // Only validate JSON when JSON mode
+    if (String(bodyMode || "json").toLowerCase() === "json") {
+      const t = String(body || "").trim();
+      if (t) {
+        try {
+          JSON.parse(t);
+          setBodyError("");
+        } catch {
+          setBodyError("Invalid JSON body");
+          return false;
+        }
+      }
+    } else {
+      setBodyError("");
+    }
+
+    setSaveError("");
     return true;
   };
 
   const cancelRequest = () => controllerRef.current?.abort();
+
+  function applyExampleToEditor(example) {
+    const req = example?.request || null;
+    if (!req) return;
+    try {
+      if (req.name !== undefined) setRequestName(String(req.name || ""));
+      if (req.mode) setMode(req.mode);
+      if (req.method) setMethod(String(req.method).toUpperCase());
+      if (req.url !== undefined) setUrl(String(req.url || ""));
+      if (Array.isArray(req.params)) setParams(req.params);
+      if (req.headers && typeof req.headers === "object") setHeaders(headersObjectToRows(req.headers));
+      if (req.auth) setAuth(req.auth);
+
+      const b = req.body;
+      if (b && typeof b === "object" && "mode" in b) {
+        const bm = String(b.mode || "json").toLowerCase();
+        setBodyMode(bm);
+        if (bm === "formurl" && Array.isArray(b.formUrl)) setBodyFormUrl(ensureKvRowsEnabled(b.formUrl));
+        if (bm === "formdata" && Array.isArray(b.formData)) setBodyFormData(ensureFormDataRows(b.formData));
+        if (bm === "json" || bm === "text") setBody(String(b.body || ""));
+      } else {
+        // legacy
+        setBody(String(b ?? ""));
+      }
+
+      setBodyError("");
+      setSaveError("");
+      setTab("params");
+    } catch {
+      // ignore
+    }
+  }
 
   function buildCodegenInput(draft) {
     let headerObj = buildHeadersObject(draft.headers);
     headerObj = applyAuthToHeaders(draft.auth, headerObj);
 
     const m = (draft.method || "GET").toUpperCase();
-    const hasBody =
-      !["GET", "HEAD"].includes(m) && String(draft.body || "").trim().length > 0;
+    const allowBody = !["GET", "HEAD"].includes(m);
 
-    if (hasBody) {
-      const hasContentType = Object.keys(headerObj).some(
-        (k) => k.toLowerCase() === "content-type"
-      );
-      if (!hasContentType) headerObj["Content-Type"] = "application/json";
+    const mode = String(draft.bodyMode || "json").toLowerCase();
+    let bodyOut = "";
+
+    if (allowBody) {
+      if (mode === "formurl") {
+        bodyOut = encodeFormUrl(draft.bodyFormUrl);
+        const hasBody = String(bodyOut || "").trim().length > 0;
+        if (hasBody) {
+          const hasCT = Object.keys(headerObj).some((k) => k.toLowerCase() === "content-type");
+          if (!hasCT) headerObj["Content-Type"] = "application/x-www-form-urlencoded";
+        }
+      } else if (mode === "text") {
+        bodyOut = String(draft.body || "");
+        const hasBody = String(bodyOut || "").trim().length > 0;
+        if (hasBody) {
+          const hasCT = Object.keys(headerObj).some((k) => k.toLowerCase() === "content-type");
+          if (!hasCT) headerObj["Content-Type"] = "text/plain";
+        }
+      } else if (mode === "formdata") {
+        // Codegen for multipart is not implemented in codegen helpers yet.
+        bodyOut = "";
+      } else {
+        // json
+        bodyOut = String(draft.body || "");
+        const hasBody = String(bodyOut || "").trim().length > 0;
+        if (hasBody) {
+          const hasCT = Object.keys(headerObj).some((k) => k.toLowerCase() === "content-type");
+          if (!hasCT) headerObj["Content-Type"] = "application/json";
+        }
+      }
     }
 
     return {
       method: m,
       finalUrl: buildFinalUrl(draft.url, draft.params),
       headersObj: headerObj,
-      body: hasBody ? draft.body : "",
+      body: bodyOut,
     };
   }
 
-  const copyAs = async () => {
+  const copyAs = async (formatOverride) => {
     if (!validateForCopy()) return;
+    const fmt = formatOverride || copyFormat;
 
     try {
       const input = buildCodegenInput(finalDraft);
 
       let snippet = "";
-      if (copyFormat === "curl") snippet = toCurl(input);
-      if (copyFormat === "fetch") snippet = toFetch(input);
-      if (copyFormat === "axios") snippet = toAxios(input);
+      if (fmt === "curl") snippet = toCurl(input);
+      if (fmt === "fetch") snippet = toFetch(input);
+      if (fmt === "axios") snippet = toAxios(input);
 
       await copyToClipboard(snippet);
 
-      if (copyFormat === "curl") setCopyMessage("Copied as cURL");
-      if (copyFormat === "fetch") setCopyMessage("Copied as Fetch");
-      if (copyFormat === "axios") setCopyMessage("Copied as Axios");
+      if (fmt === "curl") setCopyMessage("Copied as cURL");
+      if (fmt === "fetch") setCopyMessage("Copied as Fetch");
+      if (fmt === "axios") setCopyMessage("Copied as Axios");
     } catch {
       setCopyMessage("Copy failed");
     }
@@ -591,7 +1021,7 @@ export default function RequestBuilder({
 
     try {
       // 1) run pre-request script first (can mutate draft)
-      const baseDraft = { method, url, params, headers, body, auth, mode };
+      const baseDraft = { method, url, params, headers, body, bodyMode, bodyFormUrl, bodyFormData, auth, mode, tests, testScript, preRequestScript };
 
       const pre = await runPreRequest(traceId, baseDraft);
       if (!pre.ok) {
@@ -607,7 +1037,7 @@ export default function RequestBuilder({
       }
 
       // 2) apply env vars to the (possibly modified) draft
-      const draftAfterScript = pre.draft;
+      const draftAfterScript = { ...pre.draft, tests, testScript };
       const draftResolved = applyVarsToRequest(draftAfterScript, envVars);
 
       const finalUrl = buildFinalUrl(draftResolved.url, draftResolved.params);
@@ -626,7 +1056,22 @@ export default function RequestBuilder({
           method: draftResolved.method,
           finalUrl,
           headers: headerObj,
-          body: !["GET", "HEAD"].includes(draftResolved.method) ? draftResolved.body || "" : "",
+          bodyMode: draftResolved.bodyMode || "json",
+          body:
+            !["GET", "HEAD"].includes(draftResolved.method)
+              ? (draftResolved.bodyMode === "formurl"
+                  ? encodeFormUrl(draftResolved.bodyFormUrl)
+                  : draftResolved.bodyMode === "formdata"
+                    ? (draftResolved.bodyFormData || []).map((r) => {
+                        const k = String(r?.key || "").trim();
+                        if (!k) return null;
+                        const kind = String(r?.kind || "text").toLowerCase();
+                        return kind === "file"
+                          ? `${k}=<file:${r?.fileName || "file"}>`
+                          : `${k}=${String(r?.value ?? "")}`;
+                      }).filter(Boolean).join("&")
+                    : (draftResolved.body || ""))
+              : "",
         },
       });
 
@@ -640,17 +1085,52 @@ export default function RequestBuilder({
         };
 
         if (!["GET", "HEAD"].includes(draftResolved.method)) {
-          const b = (draftResolved.body || "").trim();
-          if (b.length > 0) {
-            options.body =
-              typeof draftResolved.body === "string"
-                ? draftResolved.body
-                : JSON.stringify(draftResolved.body);
+          const bm = String(draftResolved.bodyMode || "json").toLowerCase();
 
-            const hasContentType = Object.keys(options.headers).some(
-              (k) => k.toLowerCase() === "content-type"
-            );
-            if (!hasContentType) options.headers["Content-Type"] = "application/json";
+          // helper: add header only if user hasn't set it
+          const hasContentType = Object.keys(options.headers).some(
+            (k) => k.toLowerCase() === "content-type"
+          );
+
+          if (bm === "formurl") {
+            const enc = encodeFormUrl(draftResolved.bodyFormUrl);
+            if (enc.trim().length > 0) {
+              options.body = enc;
+              if (!hasContentType) options.headers["Content-Type"] = "application/x-www-form-urlencoded";
+            }
+          } else if (bm === "formdata") {
+            // Multipart: build FormData (text + file)
+            const fd = new FormData();
+            for (const r of draftResolved.bodyFormData || []) {
+              if (!r || r.enabled === false) continue;
+              const key = String(r.key || "").trim();
+              if (!key) continue;
+
+              const kind = String(r.kind || "text").toLowerCase();
+              if (kind === "file") {
+                const file = getFile(r.fileRefId);
+                if (!file) throw new Error(`File not attached for form-data field: ${key}. Reattach in Body tab.`);
+                fd.append(key, file, file.name);
+              } else {
+                fd.append(key, String(r.value ?? ""));
+              }
+            }
+            // do not set content-type for FormData (browser sets boundary)
+            options.headers = deleteHeaderCI(options.headers, "content-type");
+            options.body = fd;
+          } else if (bm === "text") {
+            const b = String(draftResolved.body || "");
+            if (b.trim().length > 0) {
+              options.body = b;
+              if (!hasContentType) options.headers["Content-Type"] = "text/plain";
+            }
+          } else {
+            // json (default)
+            const b = String(draftResolved.body || "");
+            if (b.trim().length > 0) {
+              options.body = b;
+              if (!hasContentType) options.headers["Content-Type"] = "application/json";
+            }
           }
         }
 
@@ -664,6 +1144,53 @@ export default function RequestBuilder({
 
         rawText = await res.text();
       } else {
+        const bm = String(draftResolved.bodyMode || "json").toLowerCase();
+
+        // Proxy payload (supports multipart via base64 parts)
+        let proxyHeaders = { ...headerObj };
+        let isMultipart = false;
+        let multipartParts = [];
+        let proxyBodyText = "";
+
+        if (!["GET", "HEAD"].includes(draftResolved.method)) {
+          if (bm === "formurl") {
+            proxyBodyText = encodeFormUrl(draftResolved.bodyFormUrl);
+          } else if (bm === "formdata") {
+            isMultipart = true;
+            proxyHeaders = deleteHeaderCI(proxyHeaders, "content-type");
+
+            for (const r of draftResolved.bodyFormData || []) {
+              if (!r || r.enabled === false) continue;
+              const name = String(r.key || "").trim();
+              if (!name) continue;
+
+              const kind = String(r.kind || "text").toLowerCase();
+              if (kind === "file") {
+                const file = getFile(r.fileRefId);
+                if (!file) throw new Error(`File not attached for form-data field: ${name}. Reattach in Body tab.`);
+
+                const base64 = await fileToBase64(file);
+                multipartParts.push({
+                  name,
+                  kind: "file",
+                  filename: file.name,
+                  mime: file.type || r.fileType || "application/octet-stream",
+                  base64,
+                });
+              } else {
+                multipartParts.push({
+                  name,
+                  kind: "text",
+                  value: String(r.value ?? ""),
+                });
+              }
+            }
+          } else {
+            // json/text
+            proxyBodyText = String(draftResolved.body || "");
+          }
+        }
+
         const proxyRes = await fetch(PROXY_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -671,8 +1198,12 @@ export default function RequestBuilder({
           body: JSON.stringify({
             url: finalUrl,
             method: draftResolved.method,
-            headers: headerObj,
-            body: !["GET", "HEAD"].includes(draftResolved.method) ? draftResolved.body || "" : "",
+            headers: proxyHeaders,
+            body: proxyBodyText,
+            isMultipart,
+            multipartParts,
+            cookieJarEnabled: true,
+            cookieJarId: getCookieJarId(),
           }),
         });
 
@@ -696,13 +1227,13 @@ export default function RequestBuilder({
       }
 
       const testReport = runAssertions({
-        tests,
+        tests: draftResolved.tests || tests,
         response: { status: resStatus, timeMs, json: parsedJson, headers: resHeaders },
       });
 
       // ✅ Phase 4: JS test script (Safe mode via Web Worker)
       let scriptTestReport = null;
-      const script = String(testScript || "").trim();
+      const script = String(draftResolved.testScript ?? testScript ?? "").trim();
       if (script) {
         scriptTestReport = await runTestScript({
           script,
@@ -719,7 +1250,22 @@ export default function RequestBuilder({
             url: draftResolved.url,
             finalUrl,
             headers: headerObj,
-            body: !["GET", "HEAD"].includes(draftResolved.method) ? draftResolved.body || "" : "",
+            bodyMode: draftResolved.bodyMode || "json",
+          body:
+            !["GET", "HEAD"].includes(draftResolved.method)
+              ? (draftResolved.bodyMode === "formurl"
+                  ? encodeFormUrl(draftResolved.bodyFormUrl)
+                  : draftResolved.bodyMode === "formdata"
+                    ? (draftResolved.bodyFormData || []).map((r) => {
+                        const k = String(r?.key || "").trim();
+                        if (!k) return null;
+                        const kind = String(r?.kind || "text").toLowerCase();
+                        return kind === "file"
+                          ? `${k}=<file:${r?.fileName || "file"}>`
+                          : `${k}=${String(r?.value ?? "")}`;
+                      }).filter(Boolean).join("&")
+                    : (draftResolved.body || ""))
+              : "",
             params: draftResolved.params,
           },
           env: envVars || {},
@@ -735,6 +1281,39 @@ export default function RequestBuilder({
         }
       }
 
+      // Phase 6: Keep the last successful exchange for "Save as Example"
+      let exchangeObj = null;
+      try {
+        exchangeObj = {
+          createdAt: new Date().toISOString(),
+          request: {
+            name: (requestName || "").trim(),
+            mode: draftResolved.mode || "direct",
+            method: draftResolved.method,
+            url: draftResolved.url,
+            finalUrl,
+            headers: headerObj,
+            body: !["GET", "HEAD"].includes(draftResolved.method)
+              ? { mode: bodyMode, body: draftResolved.body || "", formUrl: bodyFormUrl, formData: bodyFormData }
+              : { mode: "none" },
+            params: draftResolved.params,
+            auth: draftResolved.auth,
+          },
+          response: {
+            ok: true,
+            status: resStatus,
+            statusText: resStatusText,
+            timeMs,
+            headers: resHeaders,
+            rawText,
+            json: parsedJson,
+          },
+        };
+        lastExchangeRef.current = exchangeObj;
+      } catch {
+        // ignore
+      }
+
       onResponse?.({
         ok: true,
         status: resStatus,
@@ -745,7 +1324,9 @@ export default function RequestBuilder({
         json: parsedJson,
         testReport,
         scriptTestReport,
+        exchange: exchangeObj,
       });
+
 
       pushConsoleEvent({
         level: "info",
@@ -775,12 +1356,18 @@ export default function RequestBuilder({
         params: draftResolved.params,
         headers: draftResolved.headers,
         body: draftResolved.body,
+        bodyMode: draftResolved.bodyMode || "json",
+        bodyFormUrl: draftResolved.bodyFormUrl || [],
+        bodyFormData: draftResolved.bodyFormData || [],
         auth: draftResolved.auth,
         tests,
         testScript,
         dataRows,
         mode: draftResolved.mode || "direct",
         preRequestScript,
+        docText,
+        examples,
+        defaultExampleId,
         savedAt: new Date().toISOString(),
         lastResult: {
           status: resStatus,
@@ -819,12 +1406,18 @@ export default function RequestBuilder({
         params,
         headers,
         body,
+        bodyMode,
+        bodyFormUrl,
+        bodyFormData,
         auth,
         tests,
         testScript,
         dataRows,
         mode,
         preRequestScript,
+        docText,
+        examples,
+        defaultExampleId,
         savedAt: new Date().toISOString(),
         lastResult: {
           status: "ERR",
@@ -857,14 +1450,42 @@ export default function RequestBuilder({
       params,
       headers,
       body,
+      bodyMode,
+      bodyFormUrl,
+      bodyFormData,
       auth,
       tests,
       testScript,
       dataRows,
       mode,
       preRequestScript,
+      docText,
+      examples,
+      defaultExampleId,
     });
   };
+
+  // copyMenuOutsideClick: close Copy menu on outside click / ESC
+  useEffect(() => {
+    function onDown(e) {
+      if (!copyMenuOpen) return;
+      const menuEl = copyMenuRef.current;
+      const splitEl = copySplitRef.current;
+      if (menuEl && menuEl.contains(e.target)) return;
+      if (splitEl && splitEl.contains(e.target)) return;
+      setCopyMenuOpen(false);
+    }
+    function onKey(e) {
+      if (!copyMenuOpen) return;
+      if (e.key === "Escape") setCopyMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [copyMenuOpen]);
 
   // ----------------------------
   // Phase 4.2.5: Import + preview + Save to collections
@@ -931,6 +1552,15 @@ export default function RequestBuilder({
 
     setHeaders(ensureKvRows(cleanedHeaders));
     setBody(parsed.body || "");
+    // decide body mode based on body content
+    const t = String(parsed.body || "").trim();
+    if (!t) { setBodyMode("json"); setBodyError(""); }
+    else {
+      try { JSON.parse(t); setBodyMode("json"); setBodyError(""); }
+      catch { setBodyMode("text"); setBodyError(""); }
+    }
+    setBodyFormUrl(ensureKvRowsEnabled([]));
+    setBodyFormData(ensureFormDataRows([]));
     setAuth({
       type: detectedAuth.type || "none",
       bearer: detectedAuth.bearer || "",
@@ -973,6 +1603,9 @@ export default function RequestBuilder({
       params: ensureKvRows(parsed.params),
       headers: ensureKvRows(parsed.headers),
       body: parsed.body || "",
+      bodyMode: (() => { const t = String(parsed.body || "").trim(); if (!t) return "json"; try { JSON.parse(t); return "json"; } catch { return "text"; } })(),
+      bodyFormUrl: ensureKvRowsEnabled([]),
+      bodyFormData: ensureFormDataRows([]),
       auth: parsed.auth || { type: "none" },
       tests: [],
       testScript: "",
@@ -1344,7 +1977,7 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
                     >
                       Clear Preview
                     </button>
-                    <button className="btn btnPrimary" onClick={applyImport}>
+                    <button className="btn btnPrimary btnSendPrimary" onClick={applyImport}>
                       Apply
                     </button>
                   </div>
@@ -1355,7 +1988,7 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
                 <button className="btn" onClick={closeImport}>
                   Cancel
                 </button>
-                <button className="btn btnPrimary" onClick={applyImport}>
+                <button className="btn btnPrimary btnSendPrimary" onClick={applyImport}>
                   {importPreview ? "Apply" : "Parse"}
                 </button>
               </div>
@@ -1364,14 +1997,157 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
         </div>
       ) : null}
 
-      <div className="row">
-        <input
-          className="input"
-          value={requestName}
-          onChange={(e) => setRequestName(e.target.value)}
-          placeholder="Request name"
-        />
-        <span className="badge">{envBadge}</span>
+      <div className="row rowHeader">
+        <div className="headerLeft">
+          {breadcrumb?.length ? (
+            <div className="reqBreadcrumbBar" title={crumbText}>
+              <span className="reqCrumbBadge">HTTP</span>
+              <div className="reqCrumbTrail">
+                {breadcrumb.map((b, i) => {
+                  const isLast = i === breadcrumb.length - 1;
+                  if (isLast) {
+                    return (
+                      <span key={`${b.type}-${b.nodeId || i}`} className="reqCrumbCurrent">
+                        {b.label}
+                      </span>
+                    );
+                  }
+                  return (
+                    <span key={`${b.type}-${b.nodeId || i}`} className="reqCrumbSeg">
+                      <button
+                        type="button"
+                        className="reqCrumbLink"
+                        onClick={() => navigateCrumb(b)}
+                      >
+                        {b.label}
+                      </button>
+                      <span className="reqCrumbSep">/</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="nameLine">
+            <input
+              className="input inputName"
+              value={requestName}
+              onChange={(e) => setRequestName(e.target.value)}
+              placeholder="Label (optional)"
+            />
+            {crumbText ? (
+              <div className="reqCrumbInline" title={crumbText}>
+                {crumbText}
+              </div>
+            ) : null}
+          </div>
+<div className="envBadgePro">
+            <span className="envChip envChipLabel">Env</span>
+            <span className="envChip envChipName envChipSelectWrap" title="Change environment">
+              <select
+                className="envChipSelect"
+                value={envName}
+                onChange={(e) => setEnvName(e.target.value)}
+                aria-label="Select environment"
+              >
+                {(envNames && envNames.length ? envNames : [envName]).map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <svg className="envChipCaret" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </span>
+            {envBadge.baseUrl ? (
+              <span className="envChip envChipValue" title={envBadge.baseUrl}>
+                {envBadge.baseUrl}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="headerActions">
+                    <button className="btn btnSm" onClick={openImport} disabled={loading} title="Import a request snippet">
+                      Import
+                    </button>
+          
+                    <div className="btnSplit" ref={copySplitRef}>
+                      <button
+                        className="btn btnSm btnIconMain"
+                        onClick={() => copyAs()}
+                        disabled={loading}
+                        title={`Copy (${copyFormat})`}
+                        type="button"
+                        aria-label={`Copy (${copyFormat})`}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M8 9l-3 3 3 3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M16 9l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M13 7l-2 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                        </svg>
+                      </button>
+          
+                      <button
+                        className="btn btnSm btnIcon"
+                        type="button"
+                        onClick={() => setCopyMenuOpen((v) => !v)}
+                        disabled={loading}
+                        aria-label="Copy format"
+                        title="Copy format"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      </button>
+          
+                      {copyMenuOpen && (
+                        <div className="menu menuDown" ref={copyMenuRef} role="menu">
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("curl");
+                              copyAs("curl");
+                            }}
+                          >
+                            Copy as cURL
+                          </button>
+          
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("fetch");
+                              copyAs("fetch");
+                            }}
+                          >
+                            Copy as Fetch
+                          </button>
+          
+                          <button
+                            type="button"
+                            className="menuItem"
+                            onClick={() => {
+                              setCopyMenuOpen(false);
+                              setCopyFormat("axios");
+                              copyAs("axios");
+                            }}
+                          >
+                            Copy as Axios
+                          </button>
+                        </div>
+                      )}
+                    </div>
+          
+                    <button className="btn btnSm" onClick={saveRequest} disabled={loading} title="Save request">
+                      Save
+                    </button>
+        </div>
       </div>
 
       {saveError ? (
@@ -1386,7 +2162,7 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
         </div>
       ) : null}
 
-      <div className="row">
+      <div className="row rowUrl">
         <select
           className="select"
           style={{ maxWidth: 120 }}
@@ -1407,45 +2183,71 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           placeholder="{{baseUrl}}/api/books/{{id}}"
         />
 
-        <button className="btn btnPrimary" onClick={sendRequest} disabled={loading}>
+        <button className="btn btnPrimary btnSendPrimary" onClick={sendRequest} disabled={loading}>
           {loading ? "Sending..." : "Send"}
         </button>
 
-        <div className="row" style={{ gap: 8 }}>
-          <button className="btn btnSm" onClick={openImport} disabled={loading}>
-            Import
-          </button>
-
-          <select
-            className="select"
-            value={copyFormat}
-            onChange={(e) => setCopyFormat(e.target.value)}
-            style={{ maxWidth: 160 }}
-            disabled={loading}
-            title="Copy as"
-          >
-            <option value="curl">Copy as cURL</option>
-            <option value="fetch">Copy as Fetch</option>
-            <option value="axios">Copy as Axios</option>
-          </select>
-
-          <button className="btn btnSm" onClick={copyAs} disabled={loading}>
-            Copy
-          </button>
-        </div>
-
-        <button className="btn btnSm" onClick={saveRequest} disabled={loading}>
-          Save
-        </button>
-
-        <button className="btn btnDanger" onClick={cancelRequest} disabled={!loading}>
+        <button
+          className="btn btnCancelInline"
+          onClick={cancelRequest}
+          disabled={!loading}
+          title="Cancel in-flight request"
+        >
           Cancel
         </button>
+
+        
+
       </div>
 
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="smallMuted">
-          Final URL: <span style={{ fontFamily: "var(--mono)" }}>{finalUrlPreview}</span>
+        <div className="smallMuted" style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <span style={{ whiteSpace: "nowrap" }}>Final URL:</span>
+          <span style={{ fontFamily: "var(--mono)", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {finalUrlPreview}
+          </span>
+
+          <button
+            type="button"
+            className="btn btnSm btnIcon"
+            onClick={() => {
+              setResolveTab("url");
+              setShowResolvePreview((v) => !v);
+            }}
+            title="Resolve preview (vars)"
+            aria-label="Resolve preview"
+            style={{ gap: 6 }}
+          >
+            <span aria-hidden="true">{"</>"}</span>
+            <span>Resolve</span>
+            {missingCount > 0 ? (
+              <span
+                className="badge"
+                style={{
+                  marginLeft: 6,
+                  background: "rgba(255, 70, 70, 0.15)",
+                  border: "1px solid rgba(255, 70, 70, 0.35)",
+                  color: "var(--danger)",
+                }}
+                title={`Missing variables: ${missingKeys.join(", ")}`}
+              >
+                {missingCount}
+              </span>
+            ) : usedKeys.length ? (
+              <span
+                className="badge"
+                style={{
+                  marginLeft: 6,
+                  background: "rgba(46, 204, 113, 0.14)",
+                  border: "1px solid rgba(46, 204, 113, 0.35)",
+                  color: "var(--success)",
+                }}
+                title={`Resolved variables: ${resolvedKeys.length}`}
+              >
+                ✓
+              </span>
+            ) : null}
+          </button>
         </div>
 
         <div className="tabs">
@@ -1463,6 +2265,122 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           </button>
         </div>
       </div>
+
+{showResolvePreview ? (
+  <div className="card" style={{ padding: 12, marginTop: 10 }}>
+    <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+        <div style={{ fontWeight: 800, fontSize: 13 }}>Resolve preview</div>
+        {missingCount > 0 ? (
+          <span
+            className="badge"
+            style={{
+              background: "rgba(255, 70, 70, 0.15)",
+              border: "1px solid rgba(255, 70, 70, 0.35)",
+              color: "var(--danger)",
+            }}
+          >
+            Missing: {missingCount}
+          </span>
+        ) : usedKeys.length ? (
+          <span
+            className="badge"
+            style={{
+              background: "rgba(46, 204, 113, 0.14)",
+              border: "1px solid rgba(46, 204, 113, 0.35)",
+              color: "var(--success)",
+            }}
+          >
+            All set
+          </span>
+        ) : (
+          <span className="smallMuted">No variables used</span>
+        )}
+      </div>
+
+      <button className="btn btnSm" type="button" onClick={() => setShowResolvePreview(false)}>
+        Close
+      </button>
+    </div>
+
+    <div className="tabs" style={{ marginTop: 10 }}>
+      <button
+        className={`tab ${resolveTab === "url" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("url")}
+      >
+        URL
+      </button>
+      <button
+        className={`tab ${resolveTab === "headers" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("headers")}
+      >
+        Headers
+      </button>
+      <button
+        className={`tab ${resolveTab === "body" ? "tabActive" : ""}`}
+        type="button"
+        onClick={() => setResolveTab("body")}
+      >
+        Body
+      </button>
+    </div>
+
+    <div style={{ marginTop: 10 }}>
+      {resolveTab === "url" ? (
+        <div className="monoBox">
+          <VarSegments segments={urlSegments} />
+        </div>
+      ) : resolveTab === "headers" ? (
+        <div className="monoBox">
+          {headersPreview.length ? (
+            headersPreview.map((h, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                <span style={{ opacity: 0.9 }}>
+                  <VarSegments segments={h.keySegments} />
+                </span>
+                <span style={{ opacity: 0.6 }}>:</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <VarSegments segments={h.valueSegments} />
+                </span>
+              </div>
+            ))
+          ) : (
+            <span className="smallMuted">No headers</span>
+          )}
+        </div>
+      ) : (
+        <div className="monoBox">
+          {bodyPreviewText ? <VarSegments segments={bodySegments} /> : <span className="smallMuted">No body</span>}
+        </div>
+      )}
+    </div>
+
+    {missingCount > 0 ? (
+      <div style={{ marginTop: 10 }}>
+        <div className="smallMuted">Missing variables</div>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+          {missingKeys.map((k) => (
+            <span
+              key={k}
+              style={{
+                fontFamily: "var(--mono)",
+                background: "rgba(255, 70, 70, 0.15)",
+                border: "1px solid rgba(255, 70, 70, 0.35)",
+                color: "var(--danger)",
+                borderRadius: 999,
+                padding: "2px 8px",
+              }}
+            >
+              {`{{${k}}}`}
+            </span>
+          ))}
+        </div>
+      </div>
+    ) : null}
+  </div>
+) : null}
 
       <div className="tabs">
         <button className={`tab ${tab === "params" ? "tabActive" : ""}`} onClick={() => setTab("params")}>
@@ -1486,6 +2404,9 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
         <button className={`tab ${tab === "data" ? "tabActive" : ""}`} onClick={() => setTab("data")}>
           Data
         </button>
+        <button className={`tab ${tab === "docs" ? "tabActive" : ""}`} onClick={() => setTab("docs")}>
+          Docs
+        </button>
       </div>
 
       {tab === "params" && <QueryParamsEditor params={params} setParams={setParams} />}
@@ -1494,10 +2415,16 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
       {tab === "body" && (
         <BodyEditor
           method={method}
+          bodyMode={bodyMode}
+          setBodyMode={setBodyMode}
           body={body}
           setBody={setBody}
           bodyError={bodyError}
           setBodyError={setBodyError}
+          formUrlRows={bodyFormUrl}
+          setFormUrlRows={setBodyFormUrl}
+          formDataRows={bodyFormData}
+          setFormDataRows={setBodyFormData}
         />
       )}
 

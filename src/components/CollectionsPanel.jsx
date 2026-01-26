@@ -15,6 +15,8 @@ import {
   renameCollectionTree,
   renameNode,
   setFolderDoc,
+  toggleCollectionFavorite,
+  toggleNodeFavorite,
 } from "../utils/storage";
 import { applyVarsToRequest } from "../utils/vars";
 import { toCurl, toFetch, toAxios } from "../utils/codegen";
@@ -283,7 +285,30 @@ function SvgIcon({ name, size = 16 }) {
           <path d="M19 12h.01" stroke={stroke} strokeWidth={4} strokeLinecap="round" />
         </svg>
       );
-    default:
+    
+    case "star":
+      return (
+        <svg {...common}>
+          <path
+            d="M12 17.3l-6.18 3.25 1.18-6.9L1.99 8.8l6.92-1L12 1.5l3.09 6.3 6.92 1-5.01 4.85 1.18 6.9L12 17.3z"
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+            strokeLinecap={strokeLinecap}
+            strokeLinejoin={strokeLinejoin}
+            fill="none"
+          />
+        </svg>
+      );
+    case "starFill":
+      return (
+        <svg {...common}>
+          <path
+            d="M12 17.3l-6.18 3.25 1.18-6.9L1.99 8.8l6.92-1L12 1.5l3.09 6.3 6.92 1-5.01 4.85 1.18 6.9L12 17.3z"
+            fill="currentColor"
+          />
+        </svg>
+      );
+default:
       return (
         <svg {...common}>
           <path d="M12 12h.01" stroke={stroke} strokeWidth={4} strokeLinecap="round" />
@@ -334,12 +359,12 @@ function isDescendant(rootFolder, ancestorFolderId, possibleDescendantId) {
   return !!findNodeDFS(ancestor, possibleDescendantId);
 }
 
-function collectFolders(rootFolder) {
+function collectFolders(rootFolder, rootLabel = "Root") {
   const out = [];
   function walk(node, pathParts) {
     if (!node) return;
     if (node.type === "folder") {
-      const path = node.id === "root" ? "Root" : [...pathParts, node.name].join(" / ");
+      const path = node.id === "root" ? rootLabel : [...pathParts, node.name].join(" / ");
       out.push({ id: node.id, path });
       const nextPath = node.id === "root" ? [] : [...pathParts, node.name];
       for (const c of node.children || []) walk(c, nextPath);
@@ -452,13 +477,114 @@ export default function CollectionsPanel({
 }) {
   const [trees, setTrees] = useState([]);
   const [activeCollectionId, setActiveCollectionId] = useState(null);
+  const [expandedCollectionIds, setExpandedCollectionIds] = useState(() => new Set());
+
+// Ensure requests loaded into the editor carry origin metadata so Save can write back to the same node
+const loadRequestToEditor = (node) => {
+  if (!node || node.type !== "request") return;
+
+  const tree = trees.find((t) => t.id === activeCollectionId) || null;
+  const pathNodes = tree ? buildNodePath(tree, node.id) : [];
+  const segs = [];
+  const metaSegs = [];
+  if (tree?.name) {
+    segs.push(tree.name);
+    metaSegs.push({ type: "collection", label: tree.name, collectionId: tree.id });
+  }
+  // pathNodes includes root -> ... -> request; drop root
+  for (const n of pathNodes.slice(1)) {
+    if (n?.name) {
+      segs.push(n.name);
+      metaSegs.push({
+        type: n.type,
+        label: n.name,
+        collectionId: tree?.id || activeCollectionId,
+        nodeId: n.id,
+      });
+    }
+  }
+
+  const payload = {
+    ...(node.request || {}),
+    // Ensure the editor shows the tree name (source of truth) and Save syncs back correctly
+    name: node.name || (node.request || {}).name || "Request",
+    __origin: { kind: "tree", collectionId: activeCollectionId, nodeId: node.id },
+    // Breadcrumb/path for UI (Favorites + Request header)
+    __path: { collectionId: activeCollectionId, segments: segs, meta: metaSegs, breadcrumb: segs.join(" / ") },
+  };
+
+  onLoadRequest?.(payload);
+};
+
 
   const [expanded, setExpanded] = useState(() => new Set(["root"]));
   const [selected, setSelected] = useState(null); // { collectionId, nodeId, type }
-  const [addMenu, setAddMenu] = useState("none");
-
-  const [search, setSearch] = useState("");
+const [search, setSearch] = useState("");
   const [safeReorderOnly, setSafeReorderOnly] = useState(true);
+
+  // Allow Request breadcrumb to navigate back to collection/folder (Postman-like).
+  // RequestBuilder dispatches: window.dispatchEvent(new CustomEvent("bhejo:navigate", { detail: { collectionId, nodeId } }))
+  useEffect(() => {
+    const handler = (e) => {
+      const d = e?.detail || {};
+      if (!d.collectionId) return;
+      const targetCollectionId = d.collectionId;
+      const targetNodeId = d.nodeId || null;
+
+      // Switch collection if needed
+      setActiveCollectionId(targetCollectionId);
+
+      // Defer expansion/selection until trees are ready in this render cycle
+      requestAnimationFrame(() => {
+        const tree = trees.find((t) => t.id === targetCollectionId);
+        if (!tree) return;
+
+        if (!targetNodeId) {
+          // Just focus the collection root
+          setSelected({ collectionId: targetCollectionId, nodeId: "root", type: "folder" });
+          setExpanded((prev) => {
+            const next = new Set(prev);
+            next.add("root");
+            return next;
+          });
+          return;
+        }
+
+        const path = buildNodePath(tree, targetNodeId); // root -> ... -> target
+        if (!path || path.length === 0) return;
+
+        // Expand all folders on the way (including root + target if it's a folder)
+        setExpanded((prev) => {
+          const next = new Set(prev);
+          for (const n of path) {
+            if (n?.type === "folder" || n?.id === "root") next.add(n.id);
+          }
+          return next;
+        });
+
+        const target = path[path.length - 1];
+        setSelected({ collectionId: targetCollectionId, nodeId: target.id, type: target.type });
+      });
+    };
+
+    window.addEventListener("bhejo:navigate", handler);
+    return () => window.removeEventListener("bhejo:navigate", handler);
+  }, [trees]);
+
+
+  const VISIBLE_KEY = "bhejo.visibleCollections.v1";
+  const [showVisibleMenu, setShowVisibleMenu] = useState(false);
+  const visibleRef = useRef(null);
+  const [visibleCollectionIds, setVisibleCollectionIds] = useState(() => {
+    try {
+      const raw = localStorage.getItem(VISIBLE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : null; // null means not initialized yet
+    } catch {
+      return null;
+    }
+  });
+
 
   const [editingNodeId, setEditingNodeId] = useState(null);
   const [editingValue, setEditingValue] = useState("");
@@ -479,11 +605,16 @@ export default function CollectionsPanel({
 
   const [docDraft, setDocDraft] = useState("");
   const [docDirty, setDocDirty] = useState(false);
+  const [showDocsModal, setShowDocsModal] = useState(false);
+  const [showFavoritesModal, setShowFavoritesModal] = useState(false);
 
   const importInputRef = useRef(null);
 
   const [toast, setToast] = useState("");
-  const toastTimerRef = useRef(null);
+  
+  const [showActions, setShowActions] = useState(false);
+  const actionsRef = useRef(null);
+const toastTimerRef = useRef(null);
 
   const setToastMsg = (msg) => {
     setToast(msg);
@@ -496,6 +627,17 @@ export default function CollectionsPanel({
     setTrees(t);
     if (!activeCollectionId && t.length) setActiveCollectionId(t[0].id);
   }, []);
+
+  useEffect(() => {
+    const h = () => {
+      const t = loadCollectionTrees();
+      setTrees(t);
+      if (activeCollectionId && t.some((c) => c.id === activeCollectionId)) return;
+      setActiveCollectionId(t[0]?.id || "");
+    };
+    window.addEventListener("bhejo:collectionTreesChanged", h);
+    return () => window.removeEventListener("bhejo:collectionTreesChanged", h);
+  }, [activeCollectionId]);
 
   useEffect(() => {
     return () => {
@@ -522,6 +664,156 @@ export default function CollectionsPanel({
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [ctx]);
+
+  // Visible collections: default to all, persist, and close menu on outside click.
+  useEffect(() => {
+    if (!trees || trees.length === 0) return;
+    if (visibleCollectionIds !== null) return;
+    const all = trees.map((t) => t.id);
+    setVisibleCollectionIds(all);
+    try {
+      localStorage.setItem(VISIBLE_KEY, JSON.stringify(all));
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trees]);
+
+  useEffect(() => {
+    if (visibleCollectionIds === null) return;
+    try {
+      localStorage.setItem(VISIBLE_KEY, JSON.stringify(visibleCollectionIds));
+    } catch {}
+  }, [visibleCollectionIds]);
+
+  const visibleTrees = useMemo(() => {
+    if (!trees || trees.length === 0) return [];
+    if (visibleCollectionIds === null) return trees;
+    if (visibleCollectionIds.length === 0) return trees; // safety: treat none as all
+    const set = new Set(visibleCollectionIds);
+    return trees.filter((t) => set.has(t.id));
+  }, [trees, visibleCollectionIds]);
+
+  const sortedVisibleTrees = useMemo(() => {
+    const list = Array.isArray(visibleTrees) ? [...visibleTrees] : [];
+    // Favorites on top, otherwise keep stable alphabetical order for consistency.
+    list.sort((a, b) => {
+      const fa = a?.favorite ? 1 : 0;
+      const fb = b?.favorite ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return String(a?.name || "").localeCompare(String(b?.name || ""));
+    });
+    return list;
+  }, [visibleTrees]);
+
+  const buildNodePath = (tree, nodeId) => {
+    if (!tree || !tree.root) return [];
+    const path = [];
+    const dfs = (node, acc) => {
+      if (!node) return false;
+      const nextAcc = [...acc, node];
+      if (node.id === nodeId) {
+        path.push(...nextAcc);
+        return true;
+      }
+      if (Array.isArray(node.children)) {
+        for (const ch of node.children) {
+          if (dfs(ch, nextAcc)) return true;
+        }
+      }
+      return false;
+    };
+    dfs(tree.root, []);
+    return path.filter((n) => n.id !== "root");
+  };
+
+  const getNodeById = (tree, nodeId) => {
+    if (!tree || !tree.root) return null;
+    return findNodeDFS(tree.root, nodeId);
+  };
+
+  const favorites = useMemo(() => {
+    const out = [];
+    const list = Array.isArray(trees) ? trees : [];
+
+    for (const t of list) {
+      if (!t) continue;
+
+      if (t.favorite) {
+        out.push({
+          kind: "collection",
+          collectionId: t.id,
+          nodeId: "root",
+          name: t.name,
+          path: t.name,
+        });
+      }
+
+      const walk = (node, accNames) => {
+        if (!node) return;
+        const isRoot = node.id === "root";
+        const thisName = !isRoot ? node.name : null;
+        const nextAcc = thisName ? [...accNames, thisName] : accNames;
+
+        if (node.favorite && node.id !== "root") {
+          out.push({
+            kind: node.type,
+            collectionId: t.id,
+            nodeId: node.id,
+            name: node.name,
+            method: node.type === "request" ? (node.request?.method || "GET") : null,
+            path: `${t.name} / ${nextAcc.join(" / ")}`,
+          });
+        }
+
+        if (Array.isArray(node.children)) {
+          for (const ch of node.children) walk(ch, nextAcc);
+        }
+      };
+
+      walk(t.root, []);
+    }
+
+    const rank = (k) => (k === "collection" ? 0 : k === "folder" ? 1 : 2);
+    out.sort((a, b) => {
+      const ra = rank(a.kind);
+      const rb = rank(b.kind);
+      if (ra != rb) return ra - rb;
+      return String(a.path || a.name).localeCompare(String(b.path || b.name));
+    });
+
+    return out;
+  }, [trees]);
+
+
+  // Ensure active collection is within visible list
+  useEffect(() => {
+    if (!visibleTrees || visibleTrees.length === 0) return;
+    if (!activeCollectionId || !visibleTrees.some((t) => t.id === activeCollectionId)) {
+      setActiveCollectionId(visibleTrees[0].id);
+      setSelected(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTrees]);
+
+  useEffect(() => {
+    if (!showVisibleMenu) return;
+    const onDown = (e) => {
+      const el = visibleRef.current;
+      if (!el) return;
+      if (el.contains(e.target)) return;
+      setShowVisibleMenu(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setShowVisibleMenu(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [showVisibleMenu]);
+
+
 
   const activeCollection = useMemo(
     () => trees.find((t) => t.id === activeCollectionId) || null,
@@ -626,6 +918,51 @@ export default function CollectionsPanel({
     const safeName = (activeCollection.name || "collection").replace(/[^\w\-]+/g, "_").slice(0, 60);
     downloadJson(`${safeName}.bhejo.json`, payload);
   };
+
+  const exportCollectionById = (collectionId) => {
+    try {
+      const all = loadCollectionTrees();
+      const one = (all || []).find((t) => t.id === collectionId);
+      if (!one) return;
+
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        version: 1,
+        scope: "collection",
+        collection: one,
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(one.name || "collection").replace(/[^\w\- ]+/g, "").trim() || "collection"}.bhejo.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 250);
+    } catch (e) {
+      console.error("Export collection failed", e);
+    }
+  };
+
+
+  const toggleFavoriteCollection = (collectionId) => {
+    try {
+      toggleCollectionFavorite(collectionId);
+    } finally {
+      setTrees(loadCollectionTrees());
+    }
+  };
+
+  const toggleFavoriteNode = (collectionId, nodeId) => {
+    try {
+      toggleNodeFavorite(collectionId, nodeId);
+    } finally {
+      setTrees(loadCollectionTrees());
+    }
+  };
+
 
   const openImportPicker = () => {
     if (!importInputRef.current) return;
@@ -789,7 +1126,7 @@ export default function CollectionsPanel({
 
   const deleteNodeConfirm = (node) => {
     if (!activeCollection) return;
-    const ok = confirm(`Delete ${node.type} "${node.name}"?`);
+    const ok = confirm(`Delete ${node.type} "${node.id === "root" ? (activeCollection?.name || node.name) : node.name}"?`);
     if (!ok) return;
 
     const next = deleteNode(activeCollection.id, node.id);
@@ -800,10 +1137,10 @@ export default function CollectionsPanel({
   const moveToPrompt = (node) => {
     if (!activeCollection) return;
 
-    const folders = collectFolders(activeCollection.root);
+    const folders = collectFolders(activeCollection.root, activeCollection.name || "Root");
     const lines = folders.map((f, idx) => `${idx + 1}. ${f.path}`).join("\n");
 
-    const input = prompt(`Move "${node.name}" to which folder?\n\n${lines}\n\nEnter number:`, "1");
+    const input = prompt(`Move "${node.id === "root" ? (activeCollection?.name || node.name) : node.name}" to which folder?\n\n${lines}\n\nEnter number:`, "1");
     if (!input) return;
 
     const n = Number(input);
@@ -918,6 +1255,7 @@ export default function CollectionsPanel({
   const renderCtxMenu = () => {
     if (!ctx) return null;
     const node = ctx.node;
+    const isRoot = node.id === "root";
 
     const w = 280;
     const approxItems = node.type === "folder" ? 10 : 10;
@@ -933,13 +1271,26 @@ export default function CollectionsPanel({
           <span className="ctxIcon">
             <SvgIcon name="play" />
           </span>
-          <span>Run</span>
+          <span>{isRoot ? "Run collection" : "Run"}</span>
         </button>
+
+        {isRoot && ctx.collectionId ? (
+          <>
+            <button className="ctxItem" onClick={() => (setCtx(null), exportCollectionById(ctx.collectionId))}>
+              <span className="ctxIcon">
+                <SvgIcon name="download" />
+              </span>
+              <span>Export collection</span>
+            </button>
+            <div className="ctxSep" />
+          </>
+        ) : null}
+
 
         <button
           className="ctxItem"
           disabled={node.type !== "request"}
-          onClick={() => (setCtx(null), onLoadRequest?.(node.request))}
+          onClick={() => (setCtx(null), loadRequestToEditor(node))}
         >
           <span className="ctxIcon">
             <SvgIcon name="link" />
@@ -1000,30 +1351,66 @@ export default function CollectionsPanel({
             <span className="ctxIcon">
               <SvgIcon name="doc" />
             </span>
-            <span>Edit documentation</span>
+            <span>{isRoot ? "Edit collection documentation" : "Edit documentation"}</span>
           </button>
         ) : null}
 
-        <button className="ctxItem" onClick={() => (setCtx(null), moveToPrompt(node))}>
+        <button className="ctxItem" disabled={isRoot} onClick={() => (setCtx(null), moveToPrompt(node))}>
           <span className="ctxIcon">
             <SvgIcon name="move" />
           </span>
           <span>Move to...</span>
         </button>
 
-        <button className="ctxItem" onClick={() => beginInlineRename(node)}>
-          <span className="ctxIcon">
-            <SvgIcon name="edit" />
-          </span>
-          <span>Rename (inline)</span>
-        </button>
+        
+        {isRoot ? (
+          <>
+            <button
+              className="ctxItem"
+              disabled={!activeCollection}
+              onClick={() => {
+                setCtx(null);
+                renameCollection();
+              }}
+            >
+              <span className="ctxIcon">
+                <SvgIcon name="edit" />
+              </span>
+              <span>Rename collection</span>
+            </button>
 
-        <button className="ctxItem ctxItemDanger" onClick={() => (setCtx(null), deleteNodeConfirm(node))}>
-          <span className="ctxIcon">
-            <SvgIcon name="trash" />
-          </span>
-          <span>Delete</span>
-        </button>
+            <button
+              className="ctxItem ctxItemDanger"
+              disabled={!activeCollection}
+              onClick={() => {
+                setCtx(null);
+                removeCollection();
+              }}
+            >
+              <span className="ctxIcon">
+                <SvgIcon name="trash" />
+              </span>
+              <span>Delete collection</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="ctxItem" onClick={() => beginInlineRename(node)}>
+              <span className="ctxIcon">
+                <SvgIcon name="edit" />
+              </span>
+              <span>Rename (inline)</span>
+            </button>
+
+            <button className="ctxItem ctxItemDanger" onClick={() => (setCtx(null), deleteNodeConfirm(node))}>
+              <span className="ctxIcon">
+                <SvgIcon name="trash" />
+              </span>
+              <span>Delete</span>
+            </button>
+          </>
+        )}
+
       </div>
     );
   };
@@ -1205,7 +1592,22 @@ export default function CollectionsPanel({
     return n?.name || "";
   };
 
-  const renderNode = (node, depth = 0) => {
+  
+  const sortChildren = (arr) => {
+    const list = Array.isArray(arr) ? arr : [];
+    const rank = (t) => (t === "folder" ? 0 : 1); // folders first, then requests
+    return list
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => {
+        const ra = rank(a.c?.type);
+        const rb = rank(b.c?.type);
+        if (ra !== rb) return ra - rb;
+        return a.i - b.i; // stable within group (keeps existing order)
+      })
+      .map((x) => x.c);
+  };
+
+const renderNode = (node, depth = 0, idx = 0) => {
     const isFolder = node.type === "folder";
     const forced = (search || "").trim() ? forcedExpanded.has(node.id) : false;
     const isExpanded = forced || expanded.has(node.id);
@@ -1232,7 +1634,7 @@ export default function CollectionsPanel({
     const isEditing = editingNodeId === node.id;
 
     return (
-      <div key={node.id} style={{ position: "relative" }}>
+      <div key={`${activeCollectionId}:${node.id}:${depth}:${idx}`} style={{ position: "relative" }}>
         <div
           className={rowClass}
           style={{ paddingLeft }}
@@ -1243,9 +1645,14 @@ export default function CollectionsPanel({
           onDragLeave={() => scheduleClearDropState()}
           onDrop={onDrop}
           onContextMenu={(e) => openContextMenu(e, node)}
-          onClick={() => setSelected({ collectionId: activeCollectionId, nodeId: node.id, type: node.type })}
+          onClick={() => {
+            setSelected({ collectionId: activeCollectionId, nodeId: node.id, type: node.type });
+            // Single-click opens requests (Postman-like)
+            if (node.type === "request") loadRequestToEditor(node);
+          }}
           onDoubleClick={() => {
-            if (node.type === "request") onLoadRequest?.(node.request);
+            // Double-click renames requests inline (Postman-like); folders still expand/collapse
+            if (node.type === "request") beginInlineRename(node);
             if (node.type === "folder") toggleExpand(node.id);
           }}
           title={(search || "").trim() ? "Search is active: drag disabled" : "Right-click for actions. Drag to move/reorder."}
@@ -1270,7 +1677,15 @@ export default function CollectionsPanel({
 
           {!isEditing ? (
             <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {node.name}
+              
+              {node.type === "request" ? (
+                <span className={`pmMethodBadge pmMethod-${String((node.request?.method || node.request?.draft?.method || "GET")).toUpperCase()}`}>
+                  {String((node.request?.method || node.request?.draft?.method || "GET")).toUpperCase()}
+                </span>
+              ) : null}
+              <span className="treeLabelText" title={node.id === "root" ? (activeCollection?.name || node.name) : node.name}>
+                {node.id === "root" ? (activeCollection?.name || node.name) : node.name}
+              </span>
             </span>
           ) : (
             <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
@@ -1295,8 +1710,18 @@ export default function CollectionsPanel({
             </span>
           ) : null}
 
-          {node.id !== "root" && !isEditing ? (
+          {!isEditing ? (
             <span className="treeRowActions">
+              <button
+                className={["favBtn", node.favorite ? "favOn" : ""].filter(Boolean).join(" ")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFavoriteNode(activeCollectionId, node.id);
+                }}
+                title={node.favorite ? "Unfavorite" : "Favorite"}
+              >
+                <SvgIcon name={node.favorite ? "starFill" : "star"} />
+              </button>
               <button
                 className="kebabBtn"
                 onClick={(e) => {
@@ -1312,7 +1737,7 @@ export default function CollectionsPanel({
           ) : null}
         </div>
 
-        {isFolder && isExpanded ? <div>{(node.children || []).map((child) => renderNode(child, depth + 1))}</div> : null}
+        {isFolder && isExpanded ? <div>{sortChildren(node.children || []).map((child, i) => renderNode(child, depth + 1, i))}</div> : null}
       </div>
     );
   };
@@ -1328,18 +1753,56 @@ export default function CollectionsPanel({
           onChange={onImportFile}
         />
 
-        <div className="collectionsToolbar">
+        <div className="collectionsToolbar collectionsBar">
           <div className="collectionsToolbarLeft">
             <div style={{ fontWeight: 800 }}>Collections</div>
             <span className="badge">0 collections</span>
+
+            <button
+              className="iconBtn favHeaderBtn"
+              onClick={() => setShowFavoritesModal(true)}
+              title="Favorites"
+            >
+              <SvgIcon name="starFill" />
+              <span className="favLabel">Fav</span>
+              <span className="favCountPill">{favorites.length}</span>
+            </button>
           </div>
           <div className="collectionsToolbarRight">
-            <button className="btn btnSm" onClick={createCollection}>New</button>
+            <button className="btn btnSm" onClick={createCollection}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <SvgIcon name="plus" /> New
+              </span>
+            </button>
+            <button className="btn btnSm" onClick={refresh}>Refresh</button>
+            <button className="btn btnSm" onClick={exportActive} disabled>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <SvgIcon name="download" /> Export
+              </span>
+            </button>
             <button className="btn btnSm" onClick={openImportPicker}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                 <SvgIcon name="upload" /> Import
               </span>
             </button>
+
+          <button
+            className="btn btnSm"
+            onClick={() => setShowFavoritesModal(true)}
+            title="Favorites"
+          >
+            <SvgIcon name="starFill" />
+            Favorites
+          </button>
+          <button
+            className="btn btnSm"
+            onClick={() => setShowFavoritesModal(true)}
+            title="Open favorites"
+          >
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <SvgIcon name="starFill" /> Favorites
+            </span>
+          </button>
           </div>
         </div>
 
@@ -1360,10 +1823,19 @@ export default function CollectionsPanel({
         onChange={onImportFile}
       />
 
-      <div className="collectionsToolbar">
+      <div className="collectionsToolbar collectionsBar">
         <div className="collectionsToolbarLeft">
           <div style={{ fontWeight: 800 }}>Collections</div>
-          <span className="badge">{trees.length} collections</span>
+          <span className="badge collectionsCountBadge">{trees.length} collections</span>
+
+          <button
+            className="iconBtn favHeaderBtn"
+            onClick={() => setShowFavoritesModal(true)}
+            title="Favorites"
+          >
+            <SvgIcon name="starFill" />
+            <span className="favCount">{favorites.length}</span>
+          </button>
         </div>
 
         <div className="collectionsToolbarRight">
@@ -1373,10 +1845,21 @@ export default function CollectionsPanel({
             </span>
           </button>
           <button className="btn btnSm" onClick={refresh}>Refresh</button>
+          <button className="btn btnSm" onClick={exportActive} disabled={!activeCollection}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <SvgIcon name="download" /> Export
+            </span>
+          </button>
+          <button className="btn btnSm" onClick={openImportPicker}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <SvgIcon name="upload" /> Import
+            </span>
+          </button>
         </div>
       </div>
 
-      <div className="collectionsToolbar">
+
+      <div className="collectionsToolbar collectionsBar">
         <div className="collectionsToolbarLeft" style={{ flex: 1 }}>
           <select
             className="input"
@@ -1397,40 +1880,66 @@ export default function CollectionsPanel({
             ))}
           </select>
 
-          <select
-            className="input"
-            value={addMenu}
-            onChange={(e) => {
-              const v = e.target.value;
-              setAddMenu("none");
-              if (v === "folder") addFolder();
-              if (v === "request") addRequest();
-            }}
-            style={{ maxWidth: 160 }}
-          >
-            <option value="none">Add...</option>
-            <option value="folder">Folder</option>
-            <option value="request">Request</option>
-          </select>
-        </div>
+          <div className="pmVisibleWrap" ref={visibleRef}>
+            <button
+              type="button"
+              className="btn btnSm pmVisibleBtn"
+              onClick={() => setShowVisibleMenu((v) => !v)}
+              title="Choose visible collections"
+            >
+              <span className="pmVisibleLabel">Visible</span>
+              <span className="pmVisibleValue">
+                {visibleCollectionIds === null || (visibleCollectionIds && visibleCollectionIds.length === trees.length)
+                  ? "All"
+                  : String(visibleCollectionIds.length)}
+              </span>
+              <span className="pmCaret">▾</span>
+            </button>
 
-        <div className="collectionsToolbarRight">
-          <button className="btn btnSm" onClick={exportActive} disabled={!activeCollection}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <SvgIcon name="download" /> Export
-            </span>
-          </button>
-          <button className="btn btnSm" onClick={openImportPicker}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <SvgIcon name="upload" /> Import
-            </span>
-          </button>
-          <button className="btn btnSm" onClick={renameCollection}>Rename</button>
-          <button className="btn btnDanger btnSm" onClick={removeCollection}>Delete</button>
+            {showVisibleMenu ? (
+              <div className="pmVisibleMenu" role="menu">
+                <div className="pmVisibleMenuTop">
+                  <button type="button" className="pmVisibleTop" onClick={() => setVisibleCollectionIds(trees.map((t) => t.id))}>
+                    Select all
+                  </button>
+                  <button type="button" className="pmVisibleTop" onClick={() => setVisibleCollectionIds([])}>
+                    Select none
+                  </button>
+                </div>
+                <div className="pmVisibleDivider" />
+                <div className="pmVisibleList">
+                  {trees.map((t) => {
+                    const checked =
+                      visibleCollectionIds === null || visibleCollectionIds.length === 0
+                        ? true
+                        : visibleCollectionIds.includes(t.id);
+                    return (
+                      <label key={t.id} className="pmVisibleItem">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const baseSet = new Set(
+                              visibleCollectionIds === null || visibleCollectionIds.length === 0
+                                ? trees.map((x) => x.id)
+                                : visibleCollectionIds
+                            );
+                            if (e.target.checked) baseSet.add(t.id);
+                            else baseSet.delete(t.id);
+                            setVisibleCollectionIds(Array.from(baseSet));
+                          }}
+                        />
+                        <span className="pmVisibleName">{t.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
-
-      <div className="collectionsToolbar">
+      <div className="collectionsToolbar collectionsBar">
         <div className="collectionsSearchRow">
           <input
             className="input searchInput"
@@ -1447,12 +1956,87 @@ export default function CollectionsPanel({
             Clear
           </button>
 
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <label className="pmSafeReorder" title="Prevents risky drag drops (e.g. moving folders into themselves)">
             <input type="checkbox" checked={safeReorderOnly} onChange={(e) => setSafeReorderOnly(e.target.checked)} />
-            <span className="muted">Safe reorder only</span>
+            <span className="muted">Safe reorder</span>
           </label>
         </div>
       </div>
+
+      
+      {showFavoritesModal ? (
+            <div className="favModalOverlay" onMouseDown={() => setShowFavoritesModal(false)}>
+              <div className="favModal" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="favModalHeader">
+                  <div className="favModalTitle">
+                    <SvgIcon name="starFill" /> Favorites
+                    <span className="favModalPill">{favorites.length}</span>
+                  </div>
+                  <button
+                    className="btn btnSm favModalClose"
+                    onClick={() => setShowFavoritesModal(false)}
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="favModalBody">
+                  {favorites.length ? (
+                    <div className="favModalList">
+                      {favorites.map((f) => (
+                        <button
+                          key={`${f.kind}:${f.collectionId}:${f.nodeId}`}
+                          className="favModalItem"
+                          onClick={() => {
+                            setShowFavoritesModal(false);
+                            setActiveCollectionId(f.collectionId);
+
+                            const tree = trees.find((t) => t.id === f.collectionId);
+                            const pathNodes = buildNodePath(tree, f.nodeId);
+
+                            setExpanded((prev) => {
+                              const next = new Set(prev || []);
+                              for (const n of pathNodes) {
+                                if (n.type === "folder") next.add(n.id);
+                              }
+                              return next;
+                            });
+
+                            setSelected({ collectionId: f.collectionId, nodeId: f.nodeId, type: f.kind });
+
+                            if (f.kind === "request") {
+                              const node = getNodeById(tree, f.nodeId);
+                              if (node) loadRequestToEditor(node);
+                            }
+                          }}
+                          title={f.path}
+                        >
+                          <span className="favModalLeft">
+                            {f.kind === "request" ? (
+                              <span className={`pmMethodBadge pmMethod-${String(f.method || "GET").toUpperCase()}`}>
+                                {String(f.method || "GET").toUpperCase()}
+                              </span>
+                            ) : (
+                              <IconSlot>
+                                <SvgIcon name="folder" />
+                              </IconSlot>
+                            )}
+                            <span className="favModalName">{f.name}</span>
+                          </span>
+                          <span className="favModalBread">{f.path}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="favModalEmpty">
+                      No favorites yet. Click the ⭐ next to a request or folder to pin it here.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
 
       {toast ? (
         <div className="smallMuted" style={{ color: "var(--muted)" }}>
@@ -1473,35 +2057,190 @@ export default function CollectionsPanel({
         style={dropState?.targetId === "root" ? { outline: "2px dashed rgba(255,255,255,0.14)", borderRadius: 14 } : null}
         title="Drop here to move into Root"
       >
-        {renderNode(filteredRoot, 0)}
+        {sortedVisibleTrees.map((t) => {
+          const isActive = t.id === activeCollectionId;
+          return (
+            <div key={t.id} className="pmRootBlock">
+              <div
+                className={["treeRow", isActive ? "treeRowActive" : ""].filter(Boolean).join(" ")}
+                style={{ paddingLeft: 10 }}
+                onClick={() => {
+                  setActiveCollectionId(t.id);
+                  setExpandedCollectionIds((prev) => {
+                    const next = new Set(prev || []);
+                    next.add(t.id);
+                    return next;
+                  });
+                  setSelected({ collectionId: t.id, nodeId: "root", type: "folder" });
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setActiveCollectionId(t.id);
+                  setExpandedCollectionIds((prev) => {
+                    const next = new Set(prev || []);
+                    next.add(t.id);
+                    return next;
+                  });
+                  setSelected({ collectionId: t.id, nodeId: "root", type: "folder" });
+                  const rect = { left: e.clientX, bottom: e.clientY };
+                  setCtx({ x: rect.left, y: rect.bottom + 6, collectionId: t.id, node: { id: "root", type: "folder", name: t.name } });
+                }}
+                title="Right-click for actions"
+              >
+                <span
+                  className="treeArrowHit"
+                  title={isActive ? "Collapse/Expand" : "Select & Expand"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // If not active, activate + expand
+                    if (!isActive) {
+                      setActiveCollectionId(t.id);
+                      setExpandedCollectionIds((prev) => {
+                        const next = new Set(prev || []);
+                        next.add(t.id);
+                        return next;
+                      });
+                      setSelected({ collectionId: t.id, nodeId: "root", type: "folder" });
+                      return;
+                    }
+                    // Toggle expand for active collection
+                    setExpandedCollectionIds((prev) => {
+                      const next = new Set(prev || []);
+                      if (next.has(t.id)) next.delete(t.id);
+                      else next.add(t.id);
+                      return next;
+                    });
+                  }}
+                >
+                  <IconSlot>{isActive && expandedCollectionIds?.has?.(t.id) ? <SvgIcon name="chevDown" /> : <SvgIcon name="chevRight" />}</IconSlot>
+                </span>
+                <IconSlot><SvgIcon name="folder" /></IconSlot>
+                <span className="treeLabelText" style={{ flex: 1, fontWeight: 800 }} title={t.name}>
+                  {t.name}
+                </span>
+                <span className="muted" style={{ marginRight: 6, fontSize: 12 }}>
+                  {t.count ? `${t.count} req` : ""}
+                </span>
+<span className="treeRowActions">
+                  <button
+                    className={["favBtn", t.favorite ? "favOn" : ""].filter(Boolean).join(" ")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavoriteCollection(t.id);
+                    }}
+                    title={t.favorite ? "Unfavorite collection" : "Favorite collection"}
+                  >
+                    <SvgIcon name={t.favorite ? "starFill" : "star"} />
+                  </button>
+<button
+                    className="kebabBtn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveCollectionId(t.id);
+                      setSelected({ collectionId: t.id, nodeId: "root", type: "folder" });
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setCtx({ x: rect.left, y: rect.bottom + 6, collectionId: t.id, node: { id: "root", type: "folder", name: t.name } });
+                    }}
+                    title="Actions"
+                  >
+                    <SvgIcon name="dots" />
+                  </button>
+                </span>
+                            </div>
+
+              {isActive && expandedCollectionIds?.has?.(t.id) ? (
+                <div className="pmActiveTree">
+                  {draggingId ? (
+
+                  <div
+                    className={["pmRootDropZone", dropState?.targetId === "root" ? "pmRootDropZoneActive" : ""].filter(Boolean).join(" ")}
+                    onDragOver={(e) => onDragOverRow(e, filteredRoot)}
+                    onDragLeave={() => scheduleClearDropState()}
+                    onDrop={onDrop}
+                    title="Drop here to move to collection root"
+                  />
+                                    ) : null}
+{sortChildren(filteredRoot?.children || []).map((ch, i) => renderNode(ch, 0, i))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
 
       {selected?.type === "folder" ? (
-        <div className="folderDocsPanel">
-          <div className="folderDocsHeader">
-            <div className="folderDocsTitle">Docs: {selectedFolderName || "Folder"}</div>
-            <div className="muted">{docDirty ? "Unsaved" : "Saved"}</div>
-          </div>
-
-          <textarea
-            className="folderDocsTextarea"
-            value={docDraft}
-            onChange={(e) => {
-              setDocDraft(e.target.value);
-              setDocDirty(true);
+        <>
+          <div
+            className="folderDocsBar"
+            role="button"
+            tabIndex={0}
+            onClick={() => setShowDocsModal(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setShowDocsModal(true);
+              }
             }}
-            placeholder="Write notes for this folder (auth, headers, how to run, etc.)"
-          />
+          >
+            <div className="folderDocsBarLeft">
+              <span className="folderDocsBarTitle">Docs: {selectedFolderName || "Folder"}</span>
+              <span className="folderDocsBarStatus">{docDirty ? "Unsaved" : "Saved"}</span>
+            </div>
 
-          <div className="folderDocsActions">
-            <button className="btn btnSm" disabled={!docDirty} onClick={saveFolderDoc}>
-              Save
-            </button>
-            <button className="btn btnSm" disabled={!docDirty} onClick={resetFolderDoc}>
-              Reset
-            </button>
+            <div className="folderDocsBarActions">
+              <button
+              className="btn btnSm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowDocsModal(true);
+              }}
+            >
+                Open
+              </button>
+            </div>
           </div>
-        </div>
+
+          {showDocsModal ? (
+            <div className="docsModalOverlay" onMouseDown={() => setShowDocsModal(false)}>
+              <div className="docsModal" onMouseDown={(e) => e.stopPropagation()}>
+                <div className="docsModalHeader">
+                  <div className="docsModalTitle">
+                    Docs: {selectedFolderName || "Folder"}
+                    <span className="docsModalPill">{docDirty ? "Unsaved" : "Saved"}</span>
+                  </div>
+
+                  <button className="btn btnSm docsModalClose" onClick={() => setShowDocsModal(false)} title="Close">
+                    ✕
+                  </button>
+                </div>
+
+                <textarea
+                  className="docsModalTextarea"
+                  value={docDraft}
+                  onChange={(e) => {
+                    setDocDraft(e.target.value);
+                    setDocDirty(true);
+                  }}
+                  placeholder="Write notes for this folder (auth, headers, how to run, etc.)"
+                />
+
+                <div className="docsModalActions">
+                  <button className="btn btnSm" disabled={!docDirty} onClick={saveFolderDoc}>
+                    Save
+                  </button>
+                  <button className="btn btnSm" disabled={!docDirty} onClick={resetFolderDoc}>
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+
+          
+
+
+        </>
       ) : null}
 
       <div className="muted">

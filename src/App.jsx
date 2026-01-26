@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import RequestBuilder from "./components/RequestBuilder";
 import ResponseViewer from "./components/ResponseViewer";
 import HistoryPanel from "./components/HistoryPanel";
@@ -34,7 +34,9 @@ import {
 
   // Phase 3: tree collections
   loadCollectionTrees,
+  updateRequestNodeRequest,
 } from "./utils/storage";
+import { normalizeEnvStore, envMerged, buildEnvNames } from "./utils/envs";
 
 
 import { loadSettings, saveSettings, onSettingsChange } from "./utils/settings";
@@ -81,6 +83,11 @@ function blankDraft() {
     dataRows: [],
     mode: "direct",
     preRequestScript: "",
+    // Phase 6
+    docText: "",
+    examples: [],
+    defaultExampleId: null,
+    origin: null,
     savedAt: new Date().toISOString(),
   };
 }
@@ -155,10 +162,17 @@ export default function App() {
   // Phase 3.4: when CollectionsPanel says "Run folder/collection/request"
   const [runTarget, setRunTarget] = useState(null);
 
-  // env
+  // env (Phase 5.5)
   const [envName, setEnvName] = useState(loadCurrentEnv());
-  const [envVarsAll, setEnvVarsAll] = useState(loadEnvVars());
-  const envVars = envVarsAll?.[envName] || {};
+  const [envVarsAll, setEnvVarsAll] = useState(() => normalizeEnvStore(loadEnvVars()));
+
+  // migrate legacy env store shape if needed
+  useEffect(() => {
+    setEnvVarsAll((s) => normalizeEnvStore(s));
+  }, []);
+
+  const envVars = useMemo(() => envMerged(envVarsAll, envName), [envVarsAll, envName]);
+  const envNames = useMemo(() => buildEnvNames(envVarsAll), [envVarsAll]);
 
   // theme
   const [theme, setTheme] = useState(() => {
@@ -198,6 +212,60 @@ export default function App() {
     if (activeReqTabId && reqTabs.some((t) => t.id === activeReqTabId)) return;
     setActiveReqTabId(reqTabs[0].id);
   }, [reqTabs, activeReqTabId]);
+
+  // --- Tabs overview menu (Postman-like "Tabs (N)" list)
+  const tabsBtnRef = useRef(null);
+  const tabsMenuRef = useRef(null);
+  const [tabsMenu, setTabsMenu] = useState(null); // { top, left, width } | null
+
+  const toggleTabsMenu = () => {
+    if (tabsMenu) {
+      setTabsMenu(null);
+      return;
+    }
+    const el = tabsBtnRef.current;
+    if (!el) {
+      setTabsMenu({ top: 96, left: 24, width: 360 });
+      return;
+    }
+    const r = el.getBoundingClientRect();
+    const width = 360;
+    const left = Math.min(window.innerWidth - width - 12, Math.max(12, r.right - width));
+    const top = Math.min(window.innerHeight - 12, r.bottom + 8);
+    setTabsMenu({ top, left, width });
+  };
+
+  useEffect(() => {
+    if (!tabsMenu) return;
+
+    const onDown = (e) => {
+      const menuEl = tabsMenuRef.current;
+      const btnEl = tabsBtnRef.current;
+      if (menuEl && menuEl.contains(e.target)) return;
+      if (btnEl && btnEl.contains(e.target)) return;
+      setTabsMenu(null);
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") setTabsMenu(null);
+    };
+
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onDown);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onDown);
+    };
+  }, [tabsMenu]);
+
+  const openTabFromMenu = (id) => {
+    switchTab(id);
+    setTabsMenu(null);
+  };
+
+
 
   const activeReqTab = useMemo(
     () => reqTabs.find((t) => t.id === activeReqTabId) || reqTabs[0],
@@ -275,27 +343,166 @@ export default function App() {
     return tabId;
   };
 
-  const closeTab = (tabId) => {
+    const closeTab = (tabId) => {
     setReqTabs((tabs) => {
-      const list = tabs.filter((t) => t.id !== tabId);
+      const list = Array.isArray(tabs) ? tabs : [];
+      const idx = list.findIndex((t) => t.id === tabId);
+      if (idx === -1) return tabs;
 
-      // never allow zero tabs
-      if (!list.length) {
+      const tab = list[idx];
+      if (tab?.dirty) {
+        const ok = window.confirm("You have unsaved changes in this tab. Close anyway?");
+        if (!ok) return tabs;
+      }
+
+      const next = list.filter((t) => t.id !== tabId);
+
+      // Never allow zero tabs
+      if (next.length === 0) {
         const fresh = { id: uuid("tab"), draft: blankDraft(), dirty: false, lastResponse: null };
         setActiveReqTabId(fresh.id);
         return [fresh];
       }
 
-      // if closing active tab, switch to the next best
-      if (tabId === activeReqTabId) {
-        const idx = tabs.findIndex((t) => t.id === tabId);
-        const next = list[Math.max(0, idx - 1)] || list[0];
-        setActiveReqTabId(next.id);
+      // If closing active tab, switch to nearest left, else keep active.
+      if (activeReqTabId === tabId) {
+        const newActive = next[Math.max(0, idx - 1)];
+        setActiveReqTabId(newActive.id);
       }
 
-      return list;
+      return next;
     });
   };
+  const closeOthers = (tabId) => {
+    setReqTabs((tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const idx = list.findIndex((t) => t.id === tabId);
+      if (idx === -1) return tabs;
+
+      const toClose = list.filter((t) => t.id !== tabId);
+      const dirtyCount = toClose.filter((t) => t.dirty).length;
+      if (dirtyCount > 0) {
+        const ok = window.confirm(`You have unsaved changes in ${dirtyCount} tab(s). Close them anyway?`);
+        if (!ok) return tabs;
+      }
+
+      const keep = list[idx];
+      setActiveReqTabId(keep.id);
+      return [keep];
+    });
+  };
+  const closeToRight = (tabId) => {
+    setReqTabs((tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const idx = list.findIndex((t) => t.id === tabId);
+      if (idx === -1) return tabs;
+
+      const toClose = list.slice(idx + 1);
+      const dirtyCount = toClose.filter((t) => t.dirty).length;
+      if (dirtyCount > 0) {
+        const ok = window.confirm(`You have unsaved changes in ${dirtyCount} tab(s). Close them anyway?`);
+        if (!ok) return tabs;
+      }
+
+      const kept = list.slice(0, idx + 1);
+
+      const activeIdx = list.findIndex((t) => t.id === activeReqTabId);
+      if (activeIdx > idx) setActiveReqTabId(tabId);
+
+      if (!kept.length) {
+        const fresh = { id: uuid("tab"), draft: blankDraft(), dirty: false, lastResponse: null };
+        setActiveReqTabId(fresh.id);
+        return [fresh];
+      }
+      return kept;
+    });
+  };
+
+  const closeToLeft = (tabId) => {
+    setReqTabs((tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const idx = list.findIndex((t) => t.id === tabId);
+      if (idx <= 0) return tabs;
+
+      const toClose = list.slice(0, idx);
+      const dirtyCount = toClose.filter((t) => t.dirty).length;
+      if (dirtyCount > 0) {
+        const ok = window.confirm(`You have unsaved changes in ${dirtyCount} tab(s). Close them anyway?`);
+        if (!ok) return tabs;
+      }
+
+      const kept = list.slice(idx);
+      // if active was in left part, move to clicked tab
+      const activeIdx = list.findIndex((t) => t.id === activeReqTabId);
+      if (activeIdx < idx) setActiveReqTabId(tabId);
+
+      return kept.length ? kept : tabs;
+    });
+  };
+
+  const closeAll = () => {
+    setReqTabs((tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const dirtyCount = list.filter((t) => t.dirty).length;
+      if (dirtyCount > 0) {
+        const ok = window.confirm(`You have unsaved changes in ${dirtyCount} tab(s). Close all anyway?`);
+        if (!ok) return tabs;
+      }
+
+      const fresh = { id: uuid("tab"), draft: blankDraft(), dirty: false, lastResponse: null };
+      setActiveReqTabId(fresh.id);
+      return [fresh];
+    });
+  };
+
+  const duplicateTab = (tabId) => {
+    setReqTabs((tabs) => {
+      const list = Array.isArray(tabs) ? tabs : [];
+      const idx = list.findIndex((t) => t.id === tabId);
+      if (idx === -1) return tabs;
+
+      const src = list[idx];
+      const draft = JSON.parse(JSON.stringify(src.draft || blankDraft()));
+      if (draft.name) draft.name = `${draft.name} (copy)`;
+
+      const clone = {
+        ...src,
+        id: uuid("tab"),
+        draft,
+        dirty: true,
+        lastResponse: null,
+      };
+
+      const next = [...list.slice(0, idx + 1), clone, ...list.slice(idx + 1)];
+      setActiveReqTabId(clone.id);
+      return next;
+    });
+  };
+
+
+  const renameTab = (tabId, nextName) => {
+    const name = String(nextName || "").trim();
+    setReqTabs((tabs) =>
+      (tabs || []).map((t) => {
+        if (t.id !== tabId) return t;
+
+        const prev = String(t?.draft?.name || "").trim();
+        const changed = prev !== name;
+
+        return {
+          ...t,
+          draft: {
+            ...t.draft,
+            name,
+            // bump savedAt so RequestBuilder syncs the name input for active tab
+            savedAt: new Date().toISOString(),
+          },
+          dirty: changed ? true : t.dirty,
+        };
+      })
+    );
+  };
+
 
   const switchTab = (tabId) => {
     if (!tabId) return;
@@ -304,6 +511,15 @@ export default function App() {
 
   const handleDraftChange = (draft, meta) => {
     if (!draft || !activeReqTabId) return;
+
+    // If this tab was opened from Collections tree, keep the node updated automatically
+    if (draft?.origin?.kind === "tree" && draft.origin.collectionId && draft.origin.nodeId) {
+      try {
+        updateRequestNodeRequest(draft.origin.collectionId, draft.origin.nodeId, draft);
+      } catch {
+        // ignore
+      }
+    }
 
     setReqTabs((tabs) =>
       tabs.map((t) => {
@@ -327,6 +543,8 @@ export default function App() {
   };
 
   const openFromPayload = (payload, { dirty = false } = {}) => {
+    const origin = payload?.__origin || payload?.origin || null;
+
     const draft = {
       id: payload.id || uuid("req"),
       name: payload.name || "",
@@ -341,8 +559,48 @@ export default function App() {
       dataRows: payload.dataRows || [],
       mode: payload.mode || "direct",
       preRequestScript: payload.preRequestScript || "",
+      // Phase 6
+      docText: payload.docText || "",
+      examples: Array.isArray(payload.examples) ? payload.examples : [],
+      defaultExampleId: payload.defaultExampleId || null,
+      origin,
       savedAt: new Date().toISOString(),
     };
+
+    // Collections tree: avoid opening the same endpoint in multiple tabs.
+    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
+      setReqTabs((prev) => {
+        const tabs = Array.isArray(prev) ? prev : [];
+        const idx = tabs.findIndex(
+          (t) =>
+            t?.draft?.origin?.kind === "tree" &&
+            t.draft.origin.collectionId === origin.collectionId &&
+            t.draft.origin.nodeId === origin.nodeId
+        );
+
+        if (idx !== -1) {
+          const existingId = tabs[idx].id;
+          setActiveReqTabId(existingId);
+
+          return tabs.map((t) =>
+            t.id === existingId
+              ? {
+                  ...t,
+                  draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() },
+                  dirty: dirty ? true : t.dirty,
+                }
+              : t
+          );
+        }
+
+        const tabId = uuid("tab");
+        const d = { ...blankDraft(), ...draft };
+        const tab = { id: tabId, draft: { ...d, savedAt: new Date().toISOString() }, dirty, lastResponse: null };
+        setActiveReqTabId(tabId);
+        return [tab, ...tabs];
+      });
+      return;
+    }
 
     newTab(draft, { activate: true, dirty });
   };
@@ -377,13 +635,59 @@ export default function App() {
   // Legacy Saved handlers (kept for now)
   // -----------------------
   const handleSaveRequest = (draft) => {
+    const origin =
+      activeReqTab?.draft?.origin ||
+      draft?.origin ||
+      draft?.__origin ||
+      null;
+
+    // If this tab was opened from Collections, save back into the same tree node (Postman-like)
+    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
+      try {
+        updateRequestNodeRequest(origin.collectionId, origin.nodeId, {
+          ...draft,
+          // keep linkage metadata in the in-memory draft (storage will normalize/ignore unknown keys)
+          origin,
+        });
+      } catch {
+        // ignore
+      }
+
+      // Mark current tab clean and bump savedAt so RequestBuilder re-syncs inputs
+      setReqTabs((tabs) =>
+        (tabs || []).map((t) =>
+          t.id === activeReqTabId
+            ? {
+                ...t,
+                dirty: false,
+                draft: {
+                  ...t.draft,
+                  ...draft,
+                  origin,
+                  savedAt: new Date().toISOString(),
+                },
+              }
+            : t
+        )
+      );
+
+      return;
+    }
+
+    // Fallback: save to legacy "Saved" list
     const updated = upsertSavedByName(draft);
     setSaved(updated);
     setSidebarTab("saved");
-    // mark current tab clean
-    setReqTabs((tabs) => tabs.map((t) => (t.id === activeReqTabId ? { ...t, dirty: false } : t)));
-  };
 
+    // Mark current tab clean
+    setReqTabs((tabs) =>
+      (tabs || []).map((t) =>
+        t.id === activeReqTabId
+          ? { ...t, dirty: false, draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() } }
+          : t
+      )
+    );
+  };
   const handleLoadSaved = (item) => {
     openFromPayload({
       id: item.id,
@@ -543,12 +847,14 @@ export default function App() {
       <div className="layout">
         {/* LEFT */}
         <div className="panel">
+          {sidebarTab !== "collections" ? (
           <div className="panelHeader">
             <div className="row" style={{ justifyContent: "space-between", width: "100%" }}>
               <div className="panelTitle">{tabTitle(sidebarTab)}</div>
               {sidebarHeaderRight}
             </div>
           </div>
+          ) : null}
 
           <div className="panelBody sidebarBody">
             {sidebarTab === "history" ? (
@@ -576,6 +882,8 @@ export default function App() {
             ) : sidebarTab === "runner" ? (
               <RunnerPanel
                 envName={envName}
+                envNames={envNames}
+                setEnvName={setEnvName}
                 envVars={envVars}
                 runTarget={runTarget}
                 onConsumeRunTarget={() => setRunTarget(null)}
@@ -593,7 +901,17 @@ export default function App() {
           <div className="panel">
             <div className="panelHeader">
               <div className="panelTitle">Request</div>
-              <span className="badge">Tabs</span>
+              <div className="panelHeaderActions">
+                <button
+                  ref={tabsBtnRef}
+                  type="button"
+                  className="badge badgeBtn"
+                  onClick={toggleTabsMenu}
+                  title="Show open request tabs"
+                >
+                  Tabs <span className="badgeCount">{reqTabs.length}</span>
+                </button>
+              </div>
             </div>
 
             <div className="panelBody">
@@ -603,7 +921,79 @@ export default function App() {
                 onSwitch={switchTab}
                 onNew={() => newTab()}
                 onClose={closeTab}
+                onRename={renameTab}
+                onCloseOthers={closeOthers}
+                onCloseToRight={closeToRight}
+                onCloseToLeft={closeToLeft}
+                onCloseAll={closeAll}
+                onDuplicate={duplicateTab}
               />
+
+              {tabsMenu ? (
+                <div
+                  className="tabsOverviewMenu"
+                  ref={tabsMenuRef}
+                  style={{ top: tabsMenu.top, left: tabsMenu.left, width: tabsMenu.width }}
+                >
+                  <div className="tabsOverviewHeader">
+                    <div className="tabsOverviewTitle">Open tabs</div>
+                    <div className="tabsOverviewMeta">{reqTabs.length} total</div>
+                  </div>
+
+                  <div className="tabsOverviewList">
+                    {reqTabs.map((t) => {
+                      const d = t.draft || {};
+                      const method = String(d.method || "GET").toUpperCase();
+                      const name = String(d.name || "").trim();
+                      const url = String(d.url || "").trim();
+
+                      const path = (() => {
+                        try {
+                          const u = new URL(url);
+                          const p = u.pathname || "/";
+                          return p.startsWith("/") ? p : `/${p}`;
+                        } catch {
+                          let s = url;
+                          const tokenIdx = s.indexOf("}}");
+                          if (tokenIdx !== -1) s = s.slice(tokenIdx + 2);
+                          s = s.split("#")[0];
+                          s = s.split("?")[0];
+                          s = s.trim();
+                          if (s.startsWith("/")) return s || "/";
+                          const slash = s.indexOf("/");
+                          if (slash !== -1) {
+                            const p = s.slice(slash).trim();
+                            return p.startsWith("/") ? p : `/${p}`;
+                          }
+                          return "/";
+                        }
+                      })();
+
+                      const isActive = t.id === activeReqTabId;
+                      const label = name ? name : path || "/";
+
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={"tabsOverviewItem" + (isActive ? " isActive" : "")}
+                          onClick={() => openTabFromMenu(t.id)}
+                        >
+                          <span className={"tabsOverviewMethod m_" + method}>{method}</span>
+                          <span className="tabsOverviewLabel">{label}</span>
+                          {t.dirty ? (
+                            <span className="tabsOverviewDot" title="Unsaved changes">
+                              ●
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+
 
               <div style={{ height: 10 }} />
 
@@ -614,6 +1004,8 @@ export default function App() {
                 onSaveHistory={handleSaveHistory}
                 onSaveRequest={handleSaveRequest}
                 envName={envName}
+                envNames={envNames}
+                setEnvName={setEnvName}
                 envVars={envVars}
                 onDraftChange={handleDraftChange}
                 clearResponseOnLoad={false}

@@ -1,5 +1,5 @@
 // src/components/SettingsPanel.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 function getDefaultSettings() {
   return {
@@ -47,12 +47,21 @@ export default function SettingsPanel({
 
   const [draft, setDraft] = useState(merged);
 
+  const didSaveRef = useRef(false);
+  const initialPaletteRef = useRef("default");
+
   // when opened / settings change → sync draft
   useEffect(() => {
     if (!open) return;
     setDraft(merged);
-  }, [open, merged]);
 
+    // Track palette at the moment the drawer opens so Cancel can revert correctly.
+    // Also prevents "Save" from being undone by the preview cleanup.
+    didSaveRef.current = false;
+    initialPaletteRef.current =
+      document.documentElement.getAttribute("data-palette") ||
+      (settings?.ui?.palette || "default");
+  }, [open, merged, settings?.ui?.palette]);
   // ESC to close
   useEffect(() => {
     if (!open) return;
@@ -64,21 +73,17 @@ export default function SettingsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Live preview palette while drawer is open (revert on close/cancel)
+  // Live preview palette while drawer is open.
+// IMPORTANT: Do not revert after Save — only revert on Cancel / dismiss.
   useEffect(() => {
     if (!open) return;
 
-    const prev = document.documentElement.getAttribute("data-palette") || "default";
     const next = draft?.ui?.palette || "default";
-
     document.documentElement.setAttribute("data-palette", next);
 
     return () => {
-      // revert when drawer unmounts
-      document.documentElement.setAttribute(
-        "data-palette",
-        (settings?.ui?.palette || prev || "default")
-      );
+      if (didSaveRef.current) return;
+      document.documentElement.setAttribute("data-palette", initialPaletteRef.current || "default");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, draft?.ui?.palette]);
@@ -94,6 +99,9 @@ export default function SettingsPanel({
 
   const save = () => {
     const next = mergeSettings(draft);
+    didSaveRef.current = true;
+    // Apply immediately so the UI does not "snap back" due to preview cleanup timing.
+    document.documentElement.setAttribute("data-palette", next?.ui?.palette || "default");
     setSettings?.(next);
     onClose?.();
   };
@@ -102,6 +110,7 @@ export default function SettingsPanel({
 
   const cancel = () => {
     // revert draft + close
+    didSaveRef.current = false;
     setDraft(merged);
     onClose?.();
   };

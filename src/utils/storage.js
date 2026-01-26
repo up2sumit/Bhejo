@@ -111,6 +111,11 @@ function normalizeRequestPayload(payload, fallbackName = "Request") {
     dataRows: normalizeDataRows(p.dataRows),
     mode: p.mode || "direct",
     preRequestScript: normalizePreRequestScript(p.preRequestScript),
+
+    // Phase 6: docs/examples (persist inside endpoint request)
+    docText: typeof p.docText === "string" ? p.docText : "",
+    examples: Array.isArray(p.examples) ? p.examples : [],
+    defaultExampleId: p.defaultExampleId || null,
   };
 }
 
@@ -202,7 +207,6 @@ export function upsertSavedByName(newItem) {
     headers: normalizeHeaders(newItem.headers),
     body: newItem.body || "",
     auth: normalizeAuth(newItem.auth),
-
     tests: normalizeTests(newItem.tests),
 
     // Legacy collections (Phase 2.2)
@@ -216,6 +220,11 @@ export function upsertSavedByName(newItem) {
 
     // Phase 4: pre-request script
     preRequestScript: normalizePreRequestScript(newItem.preRequestScript),
+
+    // Phase 6: docs/examples
+    docText: typeof newItem.docText === "string" ? newItem.docText : "",
+    examples: Array.isArray(newItem.examples) ? newItem.examples : [],
+    defaultExampleId: newItem.defaultExampleId || null,
 
     createdAt: newItem.createdAt || nowIso,
     updatedAt: nowIso,
@@ -297,10 +306,6 @@ export function loadCollectionTrees() {
   const parsed = safeParse(COLLECTION_TREES_KEY, []);
   const list = Array.isArray(parsed) ? parsed : [];
 
-  // Compatibility layer:
-  // - Ensure each tree has .root folder
-  // - Also add .children alias (tree.children -> root.children) for UI code that expects it
-  // - Ensure nodes have both .type and .kind aliases (non-destructive copy)
   function normalizeNode(node) {
     if (!node || typeof node !== "object") return node;
     const k = nodeKind(node);
@@ -312,6 +317,7 @@ export function loadCollectionTrees() {
     if (k === "folder") {
       ensureFolderChildren(out);
       out.children = (out.children || []).map(normalizeNode);
+      out.doc = typeof out.doc === "string" ? out.doc : "";
       return out;
     }
 
@@ -353,7 +359,6 @@ export function loadCollectionTrees() {
             updatedAt: t.updatedAt || nowISO(),
           });
 
-    // alias children for some UI code
     const childrenAlias = Array.isArray(root.children) ? root.children : [];
 
     return {
@@ -371,7 +376,6 @@ export function loadCollectionTrees() {
 }
 
 export function saveCollectionTrees(trees) {
-  // Persist using the canonical shape: tree.root + node.type
   const list = Array.isArray(trees) ? trees : [];
 
   function stripNode(node) {
@@ -379,7 +383,6 @@ export function saveCollectionTrees(trees) {
     const k = nodeKind(node);
 
     const out = { ...node };
-    // canonical: type only (kind is allowed to exist, but keep both to be safe)
     if (!out.type && out.kind) out.type = out.kind;
     if (!out.kind && out.type) out.kind = out.type;
 
@@ -425,9 +428,14 @@ export function saveCollectionTrees(trees) {
   });
 
   safeSave(COLLECTION_TREES_KEY, cleaned);
+  // Notify in-app listeners (same-tab) that collection trees changed
+  try {
+    window.dispatchEvent(new CustomEvent("bhejo:collectionTreesChanged"));
+  } catch {}
+
 }
 
-// Phase 3.6.1: Root folder includes doc
+// Root folder factory
 function makeRootFolder() {
   return {
     id: "root",
@@ -525,7 +533,6 @@ function isDescendantFolder(rootFolder, ancestorFolderId, possibleDescendantId) 
 }
 
 // ----- Node operations -----
-// Phase 3.6.1: New folders include doc: ""
 export function addFolderNode(collectionId, parentFolderId, name) {
   const n = (name || "").trim() || "New Folder";
 
@@ -614,6 +621,41 @@ export function renameNode(collectionId, nodeId, newName) {
   return next;
 }
 
+// ✅ IMPORTANT: this was broken in your file — now it’s correctly outside renameNode()
+export function updateRequestNodeRequest(collectionId, nodeId, requestPayload) {
+  const trees = loadCollectionTrees();
+  const treeIdx = trees.findIndex((t) => t.id === collectionId);
+  if (treeIdx === -1) return trees;
+
+  const next = clone(trees);
+  const tree = next[treeIdx];
+
+  function walk(node) {
+    if (!node) return false;
+    if (node.id === nodeId && nodeKind(node) === "request") {
+      const fallbackName = (node.name || "Request").trim() || "Request";
+      const normalized = normalizeRequestPayload(requestPayload, fallbackName);
+
+      // Keep node name and request name in sync
+      node.name = normalized.name;
+      node.request = normalized;
+      node.updatedAt = nowISO();
+      return true;
+    }
+    if (Array.isArray(node.children)) {
+      for (const c of node.children) {
+        if (walk(c)) return true;
+      }
+    }
+    return false;
+  }
+
+  walk(tree.root);
+  tree.updatedAt = nowISO();
+  saveCollectionTrees(next);
+  return next;
+}
+
 export function deleteNode(collectionId, nodeId) {
   if (nodeId === "root") return loadCollectionTrees();
 
@@ -635,9 +677,7 @@ export function deleteNode(collectionId, nodeId) {
 }
 
 /**
- * Phase 3.5.2: move with index (supports reorder)
- * - newParentFolderId: folder id or "root"
- * - newIndex: insertion index inside destination folder children
+ * move with index (supports reorder)
  */
 export function moveNodeEx(collectionId, nodeId, newParentFolderId = "root", newIndex = 0) {
   const trees = loadCollectionTrees();
@@ -657,23 +697,19 @@ export function moveNodeEx(collectionId, nodeId, newParentFolderId = "root", new
 
   if (!dstHit || nodeKind(dstHit.node) !== "folder") return trees;
 
-  // Prevent moving a folder into itself or its descendant
   if (nodeKind(srcHit.node) === "folder") {
     if (newParentFolderId === nodeId) return trees;
     if (isDescendantFolder(col.root, nodeId, newParentFolderId)) return trees;
   }
 
-  // Remove from source
   ensureFolderChildren(srcHit.parent);
   const movingNode = srcHit.node;
   srcHit.parent.children.splice(srcHit.index, 1);
   touchFolder(srcHit.parent);
 
-  // Insert into destination at index (clamped)
   ensureFolderChildren(dstHit.node);
   let idx = Number.isFinite(newIndex) ? newIndex : 0;
 
-  // If moving within same parent and removing earlier index, shift destination index
   const sameParent = srcHit.parent.id === dstHit.node.id;
   if (sameParent && srcHit.index !== -1 && idx > srcHit.index) idx = idx - 1;
 
@@ -686,21 +722,22 @@ export function moveNodeEx(collectionId, nodeId, newParentFolderId = "root", new
   return next;
 }
 
-// Backward-compatible: "move into folder/root at top"
 export function moveNode(collectionId, nodeId, newParentFolderId = "root") {
   return moveNodeEx(collectionId, nodeId, newParentFolderId, 0);
 }
 
-// -------------------- Phase 3.6.1: Folder Docs APIs --------------------
+// -------------------- Folder Docs APIs --------------------
 export function getFolderDoc(collectionId, folderId) {
   const trees = loadCollectionTrees();
   const col = trees.find((t) => t.id === collectionId);
   if (!col) return "";
 
   const hit =
-    folderId === "root" ? { node: col.root, parent: null } : findNodeDFS(col.root, folderId);
-  if (!hit || !hit.node || nodeKind(hit.node) !== "folder") return "";
+    folderId === "root"
+      ? { node: col.root, parent: null }
+      : findNodeDFS(col.root, folderId);
 
+  if (!hit || !hit.node || nodeKind(hit.node) !== "folder") return "";
   return typeof hit.node.doc === "string" ? hit.node.doc : "";
 }
 
@@ -711,7 +748,10 @@ export function setFolderDoc(collectionId, folderId, docText) {
   if (!col) return trees;
 
   const hit =
-    folderId === "root" ? { node: col.root, parent: null } : findNodeDFS(col.root, folderId);
+    folderId === "root"
+      ? { node: col.root, parent: null }
+      : findNodeDFS(col.root, folderId);
+
   if (!hit || !hit.node || nodeKind(hit.node) !== "folder") return trees;
 
   hit.node.doc = typeof docText === "string" ? docText : "";
@@ -758,7 +798,7 @@ export function flattenRequestsFromNode(collectionId, nodeId) {
   return out;
 }
 
-// -------------------- Phase 3.7.1: Export / Import Collections --------------------
+// -------------------- Export / Import Collections --------------------
 function remapTreeIds(tree) {
   const newTreeId = uuid("tcol");
 
@@ -843,7 +883,6 @@ export function importCollectionTree(exportObject, options = {}) {
   if (!exportObject.collection || typeof exportObject.collection !== "object") return loadCollectionTrees();
 
   const incoming = exportObject.collection;
-
   const imported = remapTreeIds(incoming);
 
   const trees = loadCollectionTrees();
@@ -852,7 +891,7 @@ export function importCollectionTree(exportObject, options = {}) {
   return next;
 }
 
-// -------------------- Phase 3.7.2: Import Merge (into folder) --------------------
+// -------------------- Import Merge (into folder) --------------------
 function ensureUniqueChildName(folderNode, desiredName, type) {
   const base =
     (desiredName || "").trim() || (type === "folder" ? "Folder" : "Request");
@@ -932,13 +971,6 @@ function remapNodeIdsDeep(node) {
   return node;
 }
 
-/**
- * Merge incoming folder children into destination folder.
- * conflict:
- * - "rename": keep existing, add incoming with renamed nodes if name conflicts
- * - "skip":   keep existing, skip incoming conflicting nodes
- * - "overwrite": replace existing node when name conflicts (requests overwrite payload; folders replaced)
- */
 function mergeFolderChildren(destFolder, incomingFolder, conflict) {
   ensureFolderChildren(destFolder);
   const incomingKids = Array.isArray(incomingFolder.children) ? incomingFolder.children : [];
@@ -1008,15 +1040,6 @@ function mergeFolderChildren(destFolder, incomingFolder, conflict) {
   touchFolder(destFolder);
 }
 
-/**
- * Phase 3.7.2:
- * Import an exported collection tree INTO an existing collection folder.
- *
- * Options:
- * - targetFolderId: folder id in destination collection (default "root")
- * - conflict: "rename" | "skip" | "overwrite"  (default "rename")
- * - wrap: boolean (default true) -> creates a wrapper folder named like imported collection, then merges inside it
- */
 export function importCollectionTreeInto(destinationCollectionId, exportObject, options = {}) {
   const targetFolderId = options.targetFolderId || "root";
   const conflict = options.conflict || "rename";
@@ -1079,17 +1102,7 @@ export function importCollectionTreeInto(destinationCollectionId, exportObject, 
   return next;
 }
 
-// -------------------- Phase 4.2.5: Save imported request into tree --------------------
-/**
- * Upsert a request node under a given folder (or root) in a collection tree.
- *
- * - If a request with the same name exists in that folder (case-insensitive), overwrite its request payload.
- * - Otherwise create a new request node.
- *
- * @param {Array} trees Existing tree list (usually loadCollectionTrees()).
- * @param {Object} args { collectionId, folderId, requestName, requestPayload }
- * @returns {Array|null} Updated trees list (also persisted). Null when failed.
- */
+// -------------------- Upsert request under folder (used by imports / save-to-tree) --------------------
 export function upsertCollectionTreeRequestUnderFolder(trees, args) {
   const list = Array.isArray(trees) ? trees : [];
   const collectionId = String(args?.collectionId || "").trim();
@@ -1103,7 +1116,6 @@ export function upsertCollectionTreeRequestUnderFolder(trees, args) {
   const col = next.find((t) => t.id === collectionId);
   if (!col) return null;
 
-  // canonical root
   if (!col.root || typeof col.root !== "object") col.root = makeRootFolder();
 
   const folderHit =
@@ -1150,4 +1162,39 @@ export function upsertCollectionTreeRequestUnderFolder(trees, args) {
   col.updatedAt = nowISO();
   saveCollectionTrees(next);
   return next;
+}
+// -------------------- Favorites --------------------
+export function toggleCollectionFavorite(collectionId) {
+  const trees = loadCollectionTrees();
+  const t = trees.find((x) => x.id === collectionId);
+  if (!t) return false;
+  t.favorite = !Boolean(t.favorite);
+  saveCollectionTrees(trees);
+  return t.favorite;
+}
+
+export function toggleNodeFavorite(collectionId, nodeId) {
+  const trees = loadCollectionTrees();
+  const t = trees.find((x) => x.id === collectionId);
+  if (!t) return false;
+
+  const findNode = (node) => {
+    if (!node) return null;
+    if (node.id === nodeId) return node;
+    const kids = Array.isArray(node.children) ? node.children : [];
+    for (const ch of kids) {
+      const hit = findNode(ch);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const node = findNode(t.root);
+  if (!node || node.id === "root") return false;
+
+  node.favorite = !Boolean(node.favorite);
+  // touch parent folder timestamps
+  t.updatedAt = nowISO();
+  saveCollectionTrees(trees);
+  return node.favorite;
 }

@@ -7,7 +7,7 @@ export function normalizeEnvDelta(envDelta) {
   return envDelta;
 }
 
-// Apply delta to a single env object (not envVarsAll)
+// Apply delta to a single env object (not envVarsAll) -> returns a NEW object
 export function applyEnvDelta(baseEnv, envDelta) {
   const out = { ...(baseEnv || {}) };
   const delta = normalizeEnvDelta(envDelta);
@@ -24,6 +24,26 @@ export function applyEnvDelta(baseEnv, envDelta) {
   }
 
   return out;
+}
+
+// Apply delta IN PLACE to an existing env object (mutates target)
+// This is used by the runner to persist env changes across iterations.
+export function applyEnvDeltaInPlace(targetObj, envDelta) {
+  const t = targetObj && typeof targetObj === "object" && !Array.isArray(targetObj) ? targetObj : {};
+  const delta = normalizeEnvDelta(envDelta);
+
+  for (const [k, v] of Object.entries(delta)) {
+    const key = String(k || "").trim();
+    if (!key) continue;
+
+    if (v === null || v === undefined) {
+      delete t[key];
+    } else {
+      t[key] = String(v);
+    }
+  }
+
+  return t;
 }
 
 // Apply delta into envVarsAll for envName (returns a new envVarsAll object)

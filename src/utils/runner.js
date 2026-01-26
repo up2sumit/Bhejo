@@ -1,12 +1,20 @@
 // src/utils/runner.js
+// Phase 4 (Option B): Wire JS Tests (Safe mode = Web Worker + timeout)
+// - Runs builder tests (runAssertions)
+// - Runs Postman-like JS tests (req.testScript) via runTestScriptSafe
+// - Applies env changes from BOTH pre-request script and JS test script across the run
+// - Logs request/response/test logs to consoleBus with traceId
+
 import { applyVarsToRequest } from "./vars";
 import { runAssertions } from "./assertions";
 import { applyAuthToHeaders } from "../components/AuthEditor";
 import { pushConsoleEvent } from "./consoleBus";
 import { runPreRequestScript } from "./scriptRuntime";
 
-// ✅ Phase 4 (Option B): Safe mode JS tests in Web Worker
+// ✅ Safe mode runtime
 import { runTestScriptSafe as runTestScript } from "./testRuntimeSafe";
+
+const PROXY_URL = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
 
 function uuid(prefix = "id") {
   return (
@@ -79,10 +87,49 @@ function applyEnvDelta(baseVars, envDelta) {
   return out;
 }
 
+function applyEnvDeltaInPlace(targetObj, envDelta) {
+  const delta = envDelta && typeof envDelta === "object" ? envDelta : {};
+  for (const [k, v] of Object.entries(delta)) {
+    if (v === null) delete targetObj[k];
+    else targetObj[k] = String(v);
+  }
+}
+
+async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
+  const proxyRes = await fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      url: finalUrl,
+      method,
+      headers: headersObj,
+      body: bodyText || "",
+    }),
+  });
+
+  const data = await proxyRes.json();
+  if (!proxyRes.ok) throw new Error(data?.error || "Proxy error");
+
+  return {
+    status: data.status,
+    statusText: data.statusText || "",
+    headers: data.headers || {},
+    rawText: data.body || "",
+  };
+}
+
+/**
+ * Runs pre-request script if any.
+ * Returns:
+ *  - requestOverride: possible request mutation
+ *  - envDelta: changes to env
+ *  - mergedVarsOut: the vars you should use for THIS request after envDelta applied
+ */
 async function runPreRequestIfAny({ traceId, req, mergedVars, rowVars }) {
   const script = String(req.preRequestScript || "").trim();
   if (!script) {
-    return { ok: true, requestOverride: null, mergedVarsOut: mergedVars };
+    return { ok: true, requestOverride: null, envDelta: {}, mergedVarsOut: mergedVars };
   }
 
   const ctx = {
@@ -133,40 +180,27 @@ async function runPreRequestIfAny({ traceId, req, mergedVars, rowVars }) {
     };
   }
 
-  const mergedVarsOut = applyEnvDelta(mergedVars, res.envDelta || {});
+  const envDelta = res.envDelta || {};
+  const mergedVarsOut = applyEnvDelta(mergedVars, envDelta);
   const requestOverride = res.request || null;
 
-  return { ok: true, requestOverride, mergedVarsOut };
+  return { ok: true, requestOverride, envDelta, mergedVarsOut };
 }
 
-async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
-  const proxyRes = await fetch("http://localhost:3001/proxy", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal,
-    body: JSON.stringify({
-      url: finalUrl,
-      method,
-      headers: headersObj,
-      body: bodyText || "",
-    }),
-  });
-
-  const data = await proxyRes.json();
-  if (!proxyRes.ok) throw new Error(data?.error || "Proxy error");
-
-  return {
-    status: data.status,
-    statusText: data.statusText || "",
-    headers: data.headers || {},
-    rawText: data.body || "",
-  };
-}
-
+/**
+ * Runner batch execution
+ * - requests: array of saved request objects
+ * - envVars: base environment object
+ * - onProgress: callback
+ * - signal: AbortSignal
+ */
 export async function runBatch({ requests, envVars, onProgress, signal }) {
   const results = [];
 
-  // Expand into (request x dataRows)
+  // Persisted env across the whole run (Postman-like)
+  const globalVars = { ...(envVars || {}) };
+
+  // Expand data rows (iterations)
   const expanded = [];
   for (const req of requests || []) {
     const rows = Array.isArray(req.dataRows) ? req.dataRows : [];
@@ -193,15 +227,20 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         ? req.name || "(unnamed)"
         : `${req.name || "(unnamed)"} [${item.idx + 1}/${item.total}]`;
 
-    onProgress?.({ index: i, total: expanded.length, current: { ...req, name: displayName } });
+    onProgress?.({
+      index: i,
+      total: expanded.length,
+      current: { ...req, name: displayName },
+    });
 
     const traceId = uuid("trace");
     const start = performance.now();
 
     try {
-      const mergedVarsBase = { ...(envVars || {}), ...(item.rowVars || {}) };
+      // mergedVarsBase = global env + row vars (row vars only for this iteration)
+      const mergedVarsBase = { ...globalVars, ...(item.rowVars || {}) };
 
-      // 1) Pre-request
+      // 1) Pre-request script (can mutate request + env vars)
       const pre = await runPreRequestIfAny({
         traceId,
         req,
@@ -210,35 +249,10 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
       });
 
       if (!pre.ok) {
-        const end0 = performance.now();
-        const timeMs0 = Math.round(end0 - start);
+        const timeMs0 = Math.round(performance.now() - start);
 
-        const builderTotal = Array.isArray(req.tests) ? req.tests.length : 0;
+        const structuredTotal = (req.tests || []).length;
         const scriptTotal = String(req.testScript || "").trim() ? 1 : 0;
-
-        const payload = {
-          meta: { at: Date.now(), source: "runner", requestName: displayName },
-          builderReport: null,
-          scriptReport: {
-            passed: 0,
-            total: scriptTotal,
-            failed: scriptTotal,
-            failures: [
-              {
-                name: "Pre-request failed",
-                message: pre.error?.message || "Pre-request script failed",
-              },
-            ],
-            logs: [],
-            error: pre.error || null,
-          },
-        };
-
-        // ✅ Phase 4.4: Save last test results for Tests tab
-        try {
-          localStorage.setItem("bhejo:lastTestResults", JSON.stringify(payload));
-          window.dispatchEvent(new CustomEvent("bhejo:lastTestResults", { detail: payload }));
-        } catch {}
 
         results.push({
           id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
@@ -248,7 +262,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           status: "ERR",
           timeMs: timeMs0,
           passed: 0,
-          total: builderTotal + scriptTotal,
+          total: structuredTotal + scriptTotal,
           error: pre.error?.message || "Pre-request script failed",
           iteration: item.idx === null ? null : item.idx + 1,
           iterationTotal: item.total || 0,
@@ -269,9 +283,13 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         continue;
       }
 
+      // Apply pre-request envDelta to globalVars (persist across run)
+      applyEnvDeltaInPlace(globalVars, pre.envDelta || {});
+
+      // Vars to use for THIS request execution (after pre delta applied)
       const mergedVars = pre.mergedVarsOut;
 
-      // 2) Draft + overrides (if pre-request changed request)
+      // Build draft (apply any request overrides from pre-request)
       const baseDraft = {
         method: req.method,
         url: req.url,
@@ -296,11 +314,13 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           }
         : baseDraft;
 
-      // 3) Apply {{vars}} using mergedVars (env + rowVars + envDelta)
+      // Apply {{vars}} AFTER pre-request modifications
       const finalDraft = applyVarsToRequest(draftForVars, mergedVars);
+
+      const resolvedTests = Array.isArray(finalDraft?.tests) ? finalDraft.tests : tests;
+
       const finalUrl = buildFinalUrl(finalDraft.url, finalDraft.params);
 
-      // 4) Headers object + auth
       let headerObj = headersArrayToObject(finalDraft.headers);
       headerObj = applyAuthToHeaders(finalDraft.auth, headerObj);
 
@@ -308,7 +328,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
       const hasBody = !["GET", "HEAD"].includes(method);
       const bodyText = hasBody ? String(finalDraft.body || "") : "";
 
-      // Default content-type if body exists
+      // Default Content-Type if body exists and not provided
       if (hasBody && bodyText.trim().length > 0) {
         const hasContentType = Object.keys(headerObj).some(
           (k) => k.toLowerCase() === "content-type"
@@ -332,7 +352,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         },
       });
 
-      // 5) Execute request
+      // 2) Execute request (direct or proxy)
       let status, statusText, headers, rawText;
 
       if ((finalDraft.mode || "direct") === "proxy") {
@@ -358,66 +378,53 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         rawText = await res.text();
       }
 
-      const end = performance.now();
-      const timeMs = Math.round(end - start);
-
+      const timeMs = Math.round(performance.now() - start);
       const json = safeJsonParse(rawText);
 
-      // 6) Builder tests (existing assertions list)
+      // 3) Builder tests
       const tests = Array.isArray(req.tests) ? req.tests : [];
-      const testReport = runAssertions({ tests, response: { status, timeMs, json } });
+      const testReport = runAssertions({
+              tests: resolvedTests,
+        response: { status, timeMs, json, headers }, // ✅ include headers
+      });
 
-      // 7) JS script tests (Phase 4)
+      // 4) JS test script (Safe mode)
       let scriptTestReport = null;
       const script = String(req.testScript || "").trim();
+
       if (script) {
         scriptTestReport = await runTestScript({
           script,
-          response: {
-            status,
-            statusText,
-            headers: headers || {},
-            rawText,
-            json,
-            timeMs,
-          },
+          response: { status, statusText, headers, rawText, json, timeMs },
           request: {
-            method,
-            url: finalDraft.url,
+            ...finalDraft,
             finalUrl,
-            headers: headerObj,
+            headers: headerObj, // resolved headers used in call
             body: hasBody ? bodyText : "",
-            params: finalDraft.params,
+            params: finalDraft.params || [],
           },
-          env: mergedVars || {},
-          iterationData: item.rowVars || {}, // ✅ Phase 4.3.3 wiring
+          env: globalVars, // snapshot is sent to worker
           timeoutMs: 1500,
         });
 
+        // log script console output
         for (const l of scriptTestReport.logs || []) {
           pushConsoleEvent({
             level: l.type === "error" ? "error" : l.type === "warn" ? "warn" : "info",
             type: "testscript_log",
-            data: { traceId, source: "runner", message: l.message },
+            data: { traceId, source: "runner", name: displayName, message: l.message },
           });
         }
+
+        // ✅ Apply envDelta from test script to global vars (persist across run)
+        applyEnvDeltaInPlace(globalVars, scriptTestReport.envDelta || {});
       }
 
-      // ✅ Phase 4.4: Save last test results for Tests tab (split view)
-      try {
-        const payload = {
-          meta: { at: Date.now(), source: "runner", requestName: displayName },
-          builderReport: testReport || null,
-          scriptReport: scriptTestReport || null,
-        };
-        localStorage.setItem("bhejo:lastTestResults", JSON.stringify(payload));
-        window.dispatchEvent(new CustomEvent("bhejo:lastTestResults", { detail: payload }));
-      } catch {}
+      const builderPassed = testReport.passed || 0;
+      const builderTotal = testReport.total || 0;
+      const scriptPassed = scriptTestReport?.passed || 0;
+      const scriptTotal = scriptTestReport?.total || 0;
 
-      const passed = (testReport?.passed || 0) + (scriptTestReport?.passed || 0);
-      const total = (testReport?.total || 0) + (scriptTestReport?.total || 0);
-
-      // 8) Save result
       const itemResult = {
         id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
         baseId: req.id,
@@ -426,8 +433,8 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         status,
         statusText,
         timeMs,
-        passed,
-        total,
+        passed: builderPassed + scriptPassed,
+        total: builderTotal + scriptTotal,
         testReport,
         scriptTestReport,
         headers,
@@ -453,43 +460,18 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           headers,
           body: shorten(rawText),
           tests: {
-            passed,
-            total,
-            builder: { passed: testReport.passed, total: testReport.total },
-            script: scriptTestReport
-              ? { passed: scriptTestReport.passed, total: scriptTestReport.total }
-              : { passed: 0, total: 0 },
+            builder: { passed: builderPassed, total: builderTotal },
+            script: { passed: scriptPassed, total: scriptTotal },
+            combined: { passed: builderPassed + scriptPassed, total: builderTotal + scriptTotal },
           },
         },
       });
     } catch (err) {
-      const end = performance.now();
-      const timeMs = Math.round(end - start);
-
+      const timeMs = Math.round(performance.now() - start);
       const errorMsg = err?.name === "AbortError" ? "Aborted" : err?.message || "Failed";
 
-      const builderTotal = Array.isArray(req.tests) ? req.tests.length : 0;
+      const structuredTotal = (req.tests || []).length;
       const scriptTotal = String(req.testScript || "").trim() ? 1 : 0;
-
-      // ✅ Phase 4.4: Save last test results for Tests tab on failure too
-      try {
-        const payload = {
-          meta: { at: Date.now(), source: "runner", requestName: displayName },
-          builderReport: null,
-          scriptReport: {
-            passed: 0,
-            total: scriptTotal,
-            failed: scriptTotal,
-            failures: scriptTotal
-              ? [{ name: "Script not executed", message: "Request failed before tests ran" }]
-              : [],
-            logs: [],
-            error: { message: errorMsg },
-          },
-        };
-        localStorage.setItem("bhejo:lastTestResults", JSON.stringify(payload));
-        window.dispatchEvent(new CustomEvent("bhejo:lastTestResults", { detail: payload }));
-      } catch {}
 
       results.push({
         id: item.idx === null ? req.id : `${req.id}__row_${item.idx}`,
@@ -499,7 +481,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         status: "ERR",
         timeMs,
         passed: 0,
-        total: builderTotal + scriptTotal,
+        total: structuredTotal + scriptTotal,
         error: errorMsg,
         iteration: item.idx === null ? null : item.idx + 1,
         iterationTotal: item.total || 0,
