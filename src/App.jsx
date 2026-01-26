@@ -158,6 +158,8 @@ export default function App() {
   const [treeCollectionsCount, setTreeCollectionsCount] = useState(0);
 
   const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | collections | runner | tools
+  const prevSidebarTabRef = useRef("collections");
+  const effectiveSidebarTab = sidebarTab === "runner" ? prevSidebarTabRef.current : sidebarTab;
 
   // Phase 3.4: when CollectionsPanel says "Run folder/collection/request"
   const [runTarget, setRunTarget] = useState(null);
@@ -543,8 +545,6 @@ export default function App() {
   };
 
   const openFromPayload = (payload, { dirty = false } = {}) => {
-    const origin = payload?.__origin || payload?.origin || null;
-
     const draft = {
       id: payload.id || uuid("req"),
       name: payload.name || "",
@@ -563,44 +563,9 @@ export default function App() {
       docText: payload.docText || "",
       examples: Array.isArray(payload.examples) ? payload.examples : [],
       defaultExampleId: payload.defaultExampleId || null,
-      origin,
+      origin: payload.__origin || null,
       savedAt: new Date().toISOString(),
     };
-
-    // Collections tree: avoid opening the same endpoint in multiple tabs.
-    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
-      setReqTabs((prev) => {
-        const tabs = Array.isArray(prev) ? prev : [];
-        const idx = tabs.findIndex(
-          (t) =>
-            t?.draft?.origin?.kind === "tree" &&
-            t.draft.origin.collectionId === origin.collectionId &&
-            t.draft.origin.nodeId === origin.nodeId
-        );
-
-        if (idx !== -1) {
-          const existingId = tabs[idx].id;
-          setActiveReqTabId(existingId);
-
-          return tabs.map((t) =>
-            t.id === existingId
-              ? {
-                  ...t,
-                  draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() },
-                  dirty: dirty ? true : t.dirty,
-                }
-              : t
-          );
-        }
-
-        const tabId = uuid("tab");
-        const d = { ...blankDraft(), ...draft };
-        const tab = { id: tabId, draft: { ...d, savedAt: new Date().toISOString() }, dirty, lastResponse: null };
-        setActiveReqTabId(tabId);
-        return [tab, ...tabs];
-      });
-      return;
-    }
 
     newTab(draft, { activate: true, dirty });
   };
@@ -635,59 +600,19 @@ export default function App() {
   // Legacy Saved handlers (kept for now)
   // -----------------------
   const handleSaveRequest = (draft) => {
-    const origin =
-      activeReqTab?.draft?.origin ||
-      draft?.origin ||
-      draft?.__origin ||
-      null;
-
-    // If this tab was opened from Collections, save back into the same tree node (Postman-like)
-    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
-      try {
-        updateRequestNodeRequest(origin.collectionId, origin.nodeId, {
-          ...draft,
-          // keep linkage metadata in the in-memory draft (storage will normalize/ignore unknown keys)
-          origin,
-        });
-      } catch {
-        // ignore
-      }
-
-      // Mark current tab clean and bump savedAt so RequestBuilder re-syncs inputs
-      setReqTabs((tabs) =>
-        (tabs || []).map((t) =>
-          t.id === activeReqTabId
-            ? {
-                ...t,
-                dirty: false,
-                draft: {
-                  ...t.draft,
-                  ...draft,
-                  origin,
-                  savedAt: new Date().toISOString(),
-                },
-              }
-            : t
-        )
-      );
-
-      return;
-    }
-
-    // Fallback: save to legacy "Saved" list
     const updated = upsertSavedByName(draft);
     setSaved(updated);
     setSidebarTab("saved");
-
-    // Mark current tab clean
+    // mark current tab clean
     setReqTabs((tabs) =>
       (tabs || []).map((t) =>
         t.id === activeReqTabId
-          ? { ...t, dirty: false, draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() } }
+          ? { ...t, dirty: false, draft: { ...t.draft, savedAt: new Date().toISOString() } }
           : t
       )
     );
   };
+
   const handleLoadSaved = (item) => {
     openFromPayload({
       id: item.id,
@@ -727,30 +652,48 @@ export default function App() {
   // Top navigation (moved from sidebar)
   // -----------------------
   const goToTab = (tab) => {
-    if (tab === "collections") {
-      const trees = loadCollectionTrees();
-      setTreeCollectionsCount(Array.isArray(trees) ? trees.length : 0);
+  if (tab === "runner") {
+    if (sidebarTab !== "runner") prevSidebarTabRef.current = sidebarTab;
+    setSidebarTab("runner");
+    return;
+  }
+  if (tab === "collections") {
+    const trees = loadCollectionTrees();
+    setTreeCollectionsCount(Array.isArray(trees) ? trees.length : 0);
+  }
+  setSidebarTab(tab);
+};
+
+useEffect(() => {
+  if (sidebarTab !== "runner") return;
+
+  const onKey = (e) => {
+    if (e.key === "Escape") {
+      setSidebarTab(prevSidebarTabRef.current || "collections");
     }
-    setSidebarTab(tab);
   };
+
+  window.addEventListener("keydown", onKey);
+  return () => window.removeEventListener("keydown", onKey);
+}, [effectiveSidebarTab]);
 
   // -----------------------
   // Right-side badge/actions (now used in sidebar header only)
   // -----------------------
   const sidebarHeaderRight = useMemo(() => {
-    if (sidebarTab === "history") {
+    if (effectiveSidebarTab === "history") {
       return (
         <button className="btn btnDanger btnSm" onClick={handleClearHistory}>
           Clear
         </button>
       );
     }
-    if (sidebarTab === "saved") return <span className="badge">{saved.length} saved</span>;
-    if (sidebarTab === "env") return <span className="badge">{envName}</span>;
-    if (sidebarTab === "collections") return <span className="badge">{treeCollectionsCount}</span>;
-    if (sidebarTab === "runner") return <span className="badge">{envName}</span>;
+    if (effectiveSidebarTab === "saved") return <span className="badge">{saved.length} saved</span>;
+    if (effectiveSidebarTab === "env") return <span className="badge">{envName}</span>;
+    if (effectiveSidebarTab === "collections") return <span className="badge">{treeCollectionsCount}</span>;
+    if (effectiveSidebarTab === "runner") return <span className="badge">{envName}</span>;
     return <span className="badge">Tools</span>;
-  }, [sidebarTab, saved.length, envName, treeCollectionsCount]);
+  }, [effectiveSidebarTab, saved.length, envName, treeCollectionsCount]);
 
   return (
     <div className="container">
@@ -847,17 +790,15 @@ export default function App() {
       <div className="layout">
         {/* LEFT */}
         <div className="panel">
-          {sidebarTab !== "collections" ? (
           <div className="panelHeader">
             <div className="row" style={{ justifyContent: "space-between", width: "100%" }}>
-              <div className="panelTitle">{tabTitle(sidebarTab)}</div>
+              <div className="panelTitle">{tabTitle(effectiveSidebarTab)}</div>
               {sidebarHeaderRight}
             </div>
           </div>
-          ) : null}
 
           <div className="panelBody sidebarBody">
-            {sidebarTab === "history" ? (
+            {effectiveSidebarTab === "history" ? (
               <HistoryPanel
                 history={history}
                 onSelect={handleOpenFromHistory}
@@ -1034,6 +975,49 @@ export default function App() {
         theme={theme}
         setTheme={setTheme}
       />
+{sidebarTab === "runner" ? (
+  <div
+    className="runnerOverlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Runner"
+    onMouseDown={(e) => {
+      if (e.target === e.currentTarget) {
+        setSidebarTab(prevSidebarTabRef.current || "collections");
+      }
+    }}
+  >
+    <div className="runnerModal">
+      <div className="runnerModalHeader">
+        <div className="runnerModalTitle">Runner</div>
+        <div className="runnerModalActions">
+          <span className="badge">Env: {envName || "default"}</span>
+          <button
+            className="btn btnSm"
+            onClick={() => setSidebarTab(prevSidebarTabRef.current || "collections")}
+            title="Close Runner (Esc)"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <div className="runnerModalBody">
+        <RunnerPanel
+          envName={envName}
+          envNames={envNames}
+          setEnvName={setEnvName}
+          envVars={envVars}
+          runTarget={runTarget}
+          onConsumeRunTarget={() => setRunTarget(null)}
+          saved={saved}
+          collections={collections}
+        />
+      </div>
+    </div>
+  </div>
+) : null}
+
     </div>
   );
 }
