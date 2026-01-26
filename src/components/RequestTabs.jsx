@@ -92,7 +92,11 @@ function labelForTab(tab) {
 
   // Manual label: keep it short as well
   // Ignore older auto-generated names that look like URLs/hosts
-  if (name && !looksAutoName(name, method)) return `${method} ${name}`;
+  if (name && !looksAutoName(name, method)) {
+    const upperName = name.toUpperCase();
+    if (upperName.startsWith(method + " ")) return name;
+    return `${method} ${name}`;
+  }
 
   const path = extractPathOnly(url);
   return `${method} ${smartPath(path)}`;

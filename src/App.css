@@ -3163,3 +3163,1341 @@ a { color: inherit; }
 .resolvedVal{ flex:1; }
 
 .muted{ opacity:0.65; }
+
+
+/* =========================
+   Collections: Visible filter + multi-collection roots
+   ========================= */
+.pmVisibleWrap{ position: relative; display: inline-block; margin-left: 10px; }
+.pmVisibleBtn{ display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius: 999px; }
+.pmVisibleLabel{ font-size: 12px; opacity: .75; }
+.pmVisibleValue{ font-size: 12px; font-weight: 800; }
+.pmCaret{ font-size: 12px; opacity: .7; margin-left: -2px; }
+
+.pmVisibleMenu{
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  z-index: 80;
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+.pmVisibleMenuTop{ display:flex; gap:8px; }
+.pmVisibleTop{
+  flex: 1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: var(--text);
+  cursor: pointer;
+}
+.pmVisibleTop:hover{ background: rgba(255,255,255,0.06); }
+.pmVisibleDivider{ height: 1px; background: rgba(255,255,255,0.10); margin: 10px 0; }
+.pmVisibleList{ max-height: 220px; overflow:auto; display:flex; flex-direction:column; gap: 6px; padding-right: 4px; }
+.pmVisibleItem{ display:flex; align-items:center; gap: 10px; padding: 8px 8px; border-radius: 12px; cursor: pointer; }
+.pmVisibleItem:hover{ background: rgba(255,255,255,0.05); }
+.pmVisibleItem input{ accent-color: var(--accent); }
+.pmVisibleName{ font-size: 13px; }
+
+.pmRootBlock{ margin-bottom: 6px; }
+.pmActiveTree{ margin-left: 0; }
+.pmTreeRoots .treeRow{ border-radius: 14px; }
+
+
+/* =========================
+   Request Header polish (Env badge + baseUrl pill)
+   ========================= */
+
+.envBadgePro{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.envChip{
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+  color: rgba(229,231,235,0.85);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.envChipLabel{
+  color: rgba(229,231,235,0.70);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.envChipName{
+  background: rgba(124,58,237,0.10);
+  border-color: rgba(124,58,237,0.22);
+  color: rgba(235,230,255,0.95);
+  padding-right: 6px;
+}
+
+.envChipValue{
+  background: rgba(16,185,129,0.08);
+  border-color: rgba(16,185,129,0.22);
+  color: rgba(209,250,229,0.95);
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.envChipSelectWrap{
+  position: relative;
+  gap: 6px;
+}
+
+.envChipSelect{
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0 18px 0 2px; /* leave space for caret */
+  cursor: pointer;
+}
+
+.envChipCaret{
+  width: 16px;
+  height: 16px;
+  opacity: 0.85;
+  margin-left: -14px; /* visually sits at the right */
+  pointer-events: none;
+}
+
+.envBadgePro:focus-within .envChipName{
+  border-color: rgba(124,58,237,0.40);
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.18);
+}
+
+/* Ensure request header elements stay on one row nicely */
+.requestHeader{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerLeft{
+  align-items: center;
+  flex-wrap: wrap; /* prevents weird overlap on narrow widths */
+}
+
+/* Prevent any accidental centered overlay look from select defaults */
+select.envChipSelect{
+  background: transparent;
+}
+
+
+/* -------------------- Method badge colors (Postman-like) -------------------- */
+
+.pmMethodBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 20px;
+  padding: 0 8px;
+  margin-right: 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  line-height: 1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.92);
+  flex: 0 0 auto;
+}
+
+/* GET (green) */
+.pmMethod-GET {
+  background: rgba(39, 174, 96, 0.16);
+  border-color: rgba(39, 174, 96, 0.35);
+  color: rgba(110, 255, 170, 0.95);
+}
+
+/* POST (orange) */
+.pmMethod-POST {
+  background: rgba(243, 156, 18, 0.16);
+  border-color: rgba(243, 156, 18, 0.35);
+  color: rgba(255, 198, 110, 0.95);
+}
+
+/* PUT (blue) */
+.pmMethod-PUT {
+  background: rgba(52, 152, 219, 0.16);
+  border-color: rgba(52, 152, 219, 0.35);
+  color: rgba(150, 215, 255, 0.95);
+}
+
+/* DELETE (red) */
+.pmMethod-DELETE {
+  background: rgba(231, 76, 60, 0.16);
+  border-color: rgba(231, 76, 60, 0.35);
+  color: rgba(255, 150, 140, 0.95);
+}
+
+/* PATCH (purple) */
+.pmMethod-PATCH {
+  background: rgba(155, 89, 182, 0.16);
+  border-color: rgba(155, 89, 182, 0.35);
+  color: rgba(226, 185, 255, 0.95);
+}
+
+/* HEAD / OPTIONS (muted) */
+.pmMethod-HEAD,
+.pmMethod-OPTIONS {
+  background: rgba(149, 165, 166, 0.14);
+  border-color: rgba(149, 165, 166, 0.30);
+  color: rgba(220, 230, 230, 0.92);
+}
+
+/* When selected/active row, keep badge readable */
+.treeRow.selected .pmMethodBadge,
+.treeRow:hover .pmMethodBadge {
+  border-color: rgba(255, 255, 255, 0.20);
+}
+
+
+/* --- Tree label truncation (prevents overlap on long collection/folder/request names) --- */
+.treeRow .treeLabelText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeRow .treeLabelText strong,
+.treeRow .treeLabelText span {
+  min-width: 0;
+}
+/* Allow flex children to shrink (fix long names overlapping into actions) */
+.treeRow { min-width: 0; }
+
+/* The text label inside tree rows should truncate cleanly */
+.treeLabelText{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Visible menu should stay within the sidebar and not spill into the main panel */
+.pmVisibleMenu{
+  left: auto;
+  right: 0;
+  width: min(280px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+}
+/* Collections tree row – professional hover + active */
+.treeRow{
+  min-width: 0; /* allow ellipsis children */
+}
+
+.treeRow:hover{
+  background: rgb(from var(--accent) r g b / 0.06);
+  border: 1px solid rgb(from var(--accent) r g b / 0.10);
+}
+
+.treeRowActive{
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--accent) r g b / 0.18),
+    rgba(255,255,255,0.04)
+  );
+  border: 1px solid rgb(from var(--accent) r g b / 0.22);
+  box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.08);
+}
+
+/* left accent bar like Postman */
+.treeRowActive::before{
+  content:"";
+  position:absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--accent), var(--accent2));
+}
+
+/* keep kebab visible on active row */
+.treeRowActive .treeRowActions{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Ensure row text doesn't overlap actions, long names truncate */
+.treeRow .treeLabel,
+.treeRow .treeName,
+.treeRow .pmVisibleName{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Primary action button polish (Send) */
+.btnSendPrimary.btnPrimary{
+  box-shadow: 0 10px 24px rgb(from var(--accent) r g b / 0.18);
+}
+.btnSendPrimary.btnPrimary:hover{
+  filter: brightness(1.08);
+}
+
+/* Cancel in RequestBuilder – use danger token but stay subtle */
+.btnCancelInline{
+  background: var(--dangerSoft);
+  border: 1px solid rgb(from var(--danger) r g b / 0.35);
+  color: var(--text);
+}
+.btnCancelInline:hover{
+  filter: brightness(1.05);
+  border-color: rgb(from var(--danger) r g b / 0.45);
+}
+.btnCancelInline:disabled{
+  opacity: 0.45;
+}
+
+/* Mode pills (Direct/Proxy) – highlight selected with accent */
+.modePill,
+.modeChip,
+.modeBtn{
+  border-color: var(--border2);
+}
+.modePill.active,
+.modeChip.active,
+.modeBtn.active{
+  background: var(--accentSoft);
+  border-color: rgb(from var(--accent) r g b / 0.35);
+  box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.08);
+}
+
+/* Make tabActive palette-aware (remove hardcoded orange) */
+.tabActive{
+  background: linear-gradient(
+    180deg,
+    rgb(from var(--accent) r g b / 0.22),
+    rgb(from var(--accent2) r g b / 0.10)
+  );
+}
+/* =========================
+   Favorites (Postman-like)
+   ========================= */
+
+.favoritesPanel{
+  margin: 10px 0 12px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.favoritesHeader{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.favoritesTitle{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.favoritesTitle svg{
+  color: var(--accent);
+}
+
+.favoritesTitle .pill{
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+.favoritesList{
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.favoritesItem{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.favoritesItem:hover{
+  background: rgb(from var(--accent) r g b / 0.06);
+  border-color: rgb(from var(--accent) r g b / 0.16);
+}
+
+.favoritesLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.favoritesName{
+  font-weight: 700;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favoritesPath{
+  opacity: 0.6;
+  font-size: 12px;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  max-width: 48%;
+}
+
+/* Star button (used in tree rows) */
+.favBtn{
+  width: 32px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255,255,255,0.75);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor: pointer;
+}
+
+.favBtn:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.10);
+}
+
+.favBtn.favOn{
+  color: var(--accent);
+  background: rgb(from var(--accent) r g b / 0.10);
+  border-color: rgb(from var(--accent) r g b / 0.18);
+}
+/* =========================
+   Favorites (Postman-like)
+   ========================= */
+
+.favoritesPanel{
+  margin: 10px 0 12px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.favoritesHeader{
+  display:flex;
+  align-items:center;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.favoritesTitle{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.favoritesTitle svg{
+  color: var(--accent);
+}
+
+.favoritesTitle .pill{
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+.favoritesList{
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.favoritesItem{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.favoritesItem:hover{
+  background: rgb(from var(--accent) r g b / 0.06);
+  border-color: rgb(from var(--accent) r g b / 0.16);
+}
+
+.favoritesLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.favoritesName{
+  font-weight: 700;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Star button (used in tree rows) */
+.favBtn{
+  width: 32px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255,255,255,0.75);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor: pointer;
+}
+
+.favBtn:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.10);
+}
+
+.favBtn.favOn{
+  color: var(--accent);
+  background: rgb(from var(--accent) r g b / 0.10);
+  border-color: rgb(from var(--accent) r g b / 0.18);
+}
+
+
+.favoritesBread{
+  opacity: 0.65;
+  font-size: 12px;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* =========================
+   Favorites (Postman-like)
+   ========================= */
+
+.favoritesPanel{
+  margin: 10px 0 12px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.favoritesHeader{
+  display:flex;
+  align-items:center;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.favoritesTitle{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.favoritesTitle svg{
+  color: var(--accent);
+}
+
+.favoritesTitle .pill{
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+.favoritesList{
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.favoritesItem{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.favoritesItem:hover{
+  background: rgb(from var(--accent) r g b / 0.06);
+  border-color: rgb(from var(--accent) r g b / 0.16);
+}
+
+.favoritesLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.favoritesName{
+  font-weight: 700;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Star button (used in tree rows) */
+.favBtn{
+  width: 32px;
+  height: 28px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255,255,255,0.75);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor: pointer;
+}
+
+.favBtn:hover{
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.10);
+}
+
+.favBtn.favOn{
+  color: var(--accent);
+  background: rgb(from var(--accent) r g b / 0.10);
+  border-color: rgb(from var(--accent) r g b / 0.18);
+}
+
+
+.favoritesBread{
+  opacity: 0.65;
+  font-size: 12px;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Star color (favorites) – force yellow (Postman-like) */
+.favBtn.favOn{
+  color: #f6c343; /* warm yellow */
+  background: rgba(246, 195, 67, 0.10);
+  border-color: rgba(246, 195, 67, 0.20);
+}
+
+.favBtn.favOn:hover{
+  background: rgba(246, 195, 67, 0.14);
+  border-color: rgba(246, 195, 67, 0.28);
+}
+
+
+/* ===== Favorites (Postman-like yellow star) ===== */
+:root{ --fav:#fbbf24; --favSoft: rgb(from var(--fav) r g b / 0.16); }
+.favBtn{ color: var(--muted); }
+.favBtn:hover{ color: var(--fav); }
+.favBtn.favOn{ color: var(--fav); border-color: rgb(from var(--fav) r g b / 0.55); background: var(--favSoft); }
+.favBtn.favOn:hover{ filter: brightness(1.05); }
+.folderDocsBar{
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.folderDocsBarLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.folderDocsBarTitle{
+  font-weight: 800;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderDocsBarStatus{
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+}
+
+.docsModalOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+}
+
+.docsModal{
+  width: min(980px, 96vw);
+  height: min(720px, 90vh);
+  border-radius: 20px;
+  border: 1px solid var(--border2);
+  background: rgba(15, 20, 32, 0.92);
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+  display:flex;
+  flex-direction: column;
+  overflow:hidden;
+}
+
+.docsModalHeader{
+  padding: 12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.docsModalTitle{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  font-weight: 900;
+  min-width: 0;
+}
+
+.docsModalPill{
+  font-size: 12px;
+  opacity: 0.75;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+}
+
+.docsModalTextarea{
+  flex: 1;
+  padding: 14px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.docsModalActions{
+  padding: 12px 14px;
+  display:flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+.folderDocsBar{
+  cursor: pointer;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.folderDocsBarLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.folderDocsBarTitle{
+  font-weight: 800;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderDocsBarStatus{
+  font-size: 12px;
+  opacity: 0.7;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+}
+
+.docsModalOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+}
+
+.docsModal{
+  width: min(980px, 96vw);
+  height: min(720px, 90vh);
+  border-radius: 20px;
+  border: 1px solid var(--border2);
+  background: rgba(15, 20, 32, 0.92);
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+  display:flex;
+  flex-direction: column;
+  overflow:hidden;
+}
+
+.docsModalHeader{
+  padding: 12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.docsModalTitle{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  font-weight: 900;
+  min-width: 0;
+}
+
+.docsModalPill{
+  font-size: 12px;
+  opacity: 0.75;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+}
+
+.docsModalTextarea{
+  flex: 1;
+  padding: 14px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.docsModalActions{
+  padding: 12px 14px;
+  display:flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+
+.folderDocsBar:hover{
+  border-color: rgb(from var(--accent) r g b / 0.24);
+  background: rgb(from var(--accent) r g b / 0.06);
+}
+.favModalOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(6px);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+}
+
+.favModal{
+  width: min(980px, 96vw);
+  height: min(720px, 90vh);
+  border-radius: 20px;
+  border: 1px solid var(--border2);
+  background: rgba(15, 20, 32, 0.92);
+  box-shadow: 0 30px 90px rgba(0,0,0,0.6);
+  display:flex;
+  flex-direction: column;
+  overflow:hidden;
+}
+
+.favModalHeader{
+  padding: 12px 14px;
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+}
+
+.favModalTitle{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  font-weight: 900;
+  min-width: 0;
+}
+
+.favModalTitle svg{
+  color: var(--fav, #fbbf24);
+}
+
+.favModalPill{
+  font-size: 12px;
+  opacity: 0.75;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+}
+
+.favModalBody{
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.favModalList{
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.favModalItem{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.favModalItem:hover{
+  background: rgb(from var(--accent) r g b / 0.06);
+  border-color: rgb(from var(--accent) r g b / 0.16);
+}
+
+.favModalLeft{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.favModalName{
+  font-weight: 800;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.favModalBread{
+  opacity: 0.65;
+  font-size: 12px;
+  min-width: 0;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favModalEmpty{
+  opacity: 0.75;
+  padding: 18px 6px;
+  line-height: 1.4;
+}
+.pmRootDropZone{
+  height: 10px;
+  margin: 6px 8px;
+  border-radius: 999px;
+  border: 1px dashed transparent;
+}
+
+.pmRootDropZoneActive{
+  border-color: rgb(from var(--accent) r g b / 0.35);
+  background: rgb(from var(--accent) r g b / 0.10);
+}
+.favQuickBtn{
+  margin-left: 8px;
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.favQuickBtn svg{
+  color: var(--fav, #fbbf24);
+}
+
+.favQuickBtn .pill{
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  opacity: 0.85;
+}
+/* Favorites button in Collections toolbar */
+.favTopBtn{
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+}
+.favTopBtn svg{
+  color: var(--fav, #fbbf24);
+}
+
+/* Per-collection export button */
+.colExportBtn{
+  padding: 6px 10px;
+}
+.colExportBtn svg{
+  opacity: 0.9;
+}
+.colExportBtn:hover svg{
+  opacity: 1;
+}
+/* Favorites button in Collections header (top right of title row) */
+.favHeaderBtn{
+  margin-left: 10px;
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+}
+
+.favHeaderBtn svg{
+  width: 16px;
+  height: 16px;
+  color: var(--fav, #fbbf24);
+}
+
+.favHeaderBtn:hover{
+  background: rgb(from var(--accent) r g b / 0.08);
+  border-color: rgb(from var(--accent) r g b / 0.18);
+}
+
+.favHeaderBtn .favCount{
+  font-size: 12px;
+  opacity: 0.8;
+}
+/* Make star icon yellow wherever used */
+.btn svg, .iconBtn svg{
+  /* keep other icons as-is; star is colored by currentColor in SvgIcon so we scope to star buttons */
+}
+
+.btn[title="Favorites"] svg,
+.favHeaderBtn svg{
+  color: var(--fav, #fbbf24);
+}
+/* Favorites pill in Collections header */
+.favHeaderBtn{
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  margin-left: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border2);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+}
+
+.favHeaderBtn svg{
+  width: 16px;
+  height: 16px;
+  color: var(--fav, #fbbf24);
+  flex: 0 0 auto;
+}
+
+.favHeaderBtn .favLabel{
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  opacity: 0.9;
+}
+
+.favHeaderBtn .favCountPill{
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgb(from var(--fav, #fbbf24) r g b / 0.35);
+  background: rgb(from var(--fav, #fbbf24) r g b / 0.12);
+  color: var(--text);
+  opacity: 0.95;
+}
+
+.favHeaderBtn:hover{
+  background: rgb(from var(--accent) r g b / 0.08);
+  border-color: rgb(from var(--accent) r g b / 0.18);
+}
+/* Request breadcrumb under name input */
+.reqCrumb{
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.7;
+  max-width: 520px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Breadcrumb inline (Postman-like) beside request name input */
+.nameLine{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.nameLine .inputName{
+  flex: 0 0 360px;
+  min-width: 240px;
+}
+
+.reqCrumbInline{
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1100px){
+  .nameLine .inputName{ flex-basis: 300px; }
+}
+@media (max-width: 900px){
+  .nameLine{
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .nameLine .inputName{ flex-basis: auto; }
+  .reqCrumbInline{ white-space: normal; }
+}
+/* ===== Request breadcrumb ===== */
+.reqBreadcrumbBar{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  min-width: 0;
+}
+
+.reqCrumbBadge{
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.85;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  flex: 0 0 auto;
+}
+
+.reqCrumbTrail{
+  display:flex;
+  align-items:center;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.reqCrumbSeg{
+  display:flex;
+  align-items:center;
+  min-width: 0;
+}
+
+.reqCrumbLink{
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 12px;
+  opacity: 0.85;
+  cursor: pointer;
+  color: inherit;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reqCrumbLink:hover{
+  opacity: 1;
+  background: rgba(255,255,255,0.05);
+}
+
+.reqCrumbSep{
+  opacity: 0.35;
+  padding: 0 2px;
+}
+
+.reqCrumbCurrent{
+  font-size: 12px;
+  font-weight: 650;
+  opacity: 0.95;
+  padding: 2px 6px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Keep name input + optional inline crumb layout */
+.nameLine{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.nameLine .inputName{
+  flex: 0 0 360px;
+  min-width: 240px;
+}
+
+.reqCrumbInline{
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1100px){
+  .nameLine .inputName{ flex-basis: 300px; }
+}
+
+@media (max-width: 900px){
+  .reqBreadcrumbBar{ flex-wrap: wrap; }
+  .reqCrumbTrail{ white-space: normal; }
+  .reqCrumbLink, .reqCrumbCurrent{ max-width: 100%; white-space: normal; }
+  .nameLine{
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .nameLine .inputName{ flex-basis: auto; }
+  .reqCrumbInline{ white-space: normal; }
+}

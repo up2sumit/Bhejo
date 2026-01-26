@@ -147,9 +147,45 @@ export function applyVarsToRequest(draft, envVars, metaOut) {
     }));
   }
 
-  // Body (string or JSON/object)
+  // Body
+  // bodyMode: "json" | "text" | "formurl" | "formdata"
+  out.bodyMode = d.bodyMode || "json";
+
+  // raw body string (JSON / text)
   if (typeof d.body === "string") out.body = replaceVars(d.body, envVars, metaOut);
   else out.body = deepResolve(d.body, envVars, metaOut);
+
+  // x-www-form-urlencoded rows
+  if (Array.isArray(d.bodyFormUrl)) {
+    out.bodyFormUrl = d.bodyFormUrl.map((r) => ({
+      ...r,
+      key: replaceVars(r?.key ?? "", envVars, metaOut),
+      value: replaceVars(r?.value ?? "", envVars, metaOut),
+    }));
+  } else {
+    out.bodyFormUrl = d.bodyFormUrl;
+  }
+
+  // form-data rows (text + file placeholders)
+  if (Array.isArray(d.bodyFormData)) {
+    out.bodyFormData = d.bodyFormData.map((r) => {
+      const kind = (r?.kind || "text").toLowerCase();
+      if (kind === "file") {
+        return {
+          ...r,
+          key: replaceVars(r?.key ?? "", envVars, metaOut),
+          // keep fileRefId / fileName / fileType / fileSize as-is
+        };
+      }
+      return {
+        ...r,
+        key: replaceVars(r?.key ?? "", envVars, metaOut),
+        value: replaceVars(r?.value ?? "", envVars, metaOut),
+      };
+    });
+  } else {
+    out.bodyFormData = d.bodyFormData;
+  }
 
   // Auth config (object)
   out.auth = deepResolve(d.auth, envVars, metaOut);

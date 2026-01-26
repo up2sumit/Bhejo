@@ -1,14 +1,16 @@
-function base64(str) {
-  try {
-    return btoa(str);
-  } catch {
-    // fallback for unicode
-    return btoa(unescape(encodeURIComponent(str)));
-  }
-}
+import { base64Safe } from "../utils/auth";
+export { applyAuthToHeaders } from "../utils/auth";
 
 export default function AuthEditor({ auth, setAuth }) {
-  const setType = (type) => setAuth({ type, bearer: "", username: "", password: "", apiKeyName: "x-api-key", apiKeyValue: "" });
+  const setType = (type) =>
+    setAuth({
+      type,
+      bearer: "",
+      username: "",
+      password: "",
+      apiKeyName: "x-api-key",
+      apiKeyValue: "",
+    });
 
   return (
     <div className="card" style={{ padding: 12 }}>
@@ -44,7 +46,10 @@ export default function AuthEditor({ auth, setAuth }) {
       )}
 
       {auth.type === "basic" && (
-        <div className="kvRow" style={{ marginTop: 10, gridTemplateColumns: "1fr 1fr" }}>
+        <div
+          className="kvRow"
+          style={{ marginTop: 10, gridTemplateColumns: "1fr 1fr" }}
+        >
           <input
             className="input"
             placeholder="Username"
@@ -59,7 +64,7 @@ export default function AuthEditor({ auth, setAuth }) {
             onChange={(e) => setAuth({ ...auth, password: e.target.value })}
           />
           <div className="smallMuted" style={{ gridColumn: "1 / -1" }}>
-            Will send: Authorization: Basic {base64("username:password")}
+            Will send: Authorization: Basic {base64Safe("username:password")}
           </div>
         </div>
       )}
@@ -84,26 +89,4 @@ export default function AuthEditor({ auth, setAuth }) {
       )}
     </div>
   );
-}
-
-export function applyAuthToHeaders(auth, headerObj) {
-  const hasAuthHeader = Object.keys(headerObj).some((k) => k.toLowerCase() === "authorization");
-
-  // If user already set Authorization manually, don't override.
-  if (hasAuthHeader && auth.type !== "apikey") return headerObj;
-
-  if (auth.type === "bearer" && auth.bearer?.trim()) {
-    return { ...headerObj, Authorization: `Bearer ${auth.bearer.trim()}` };
-  }
-
-  if (auth.type === "basic" && (auth.username || auth.password)) {
-    const token = btoa(`${auth.username || ""}:${auth.password || ""}`);
-    return { ...headerObj, Authorization: `Basic ${token}` };
-  }
-
-  if (auth.type === "apikey" && auth.apiKeyName?.trim()) {
-    return { ...headerObj, [auth.apiKeyName.trim()]: auth.apiKeyValue ?? "" };
-  }
-
-  return headerObj;
 }

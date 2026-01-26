@@ -267,7 +267,7 @@ function JsonTree({ value, onCopyPath }) {
   return <div className="jsonTree">{renderNode(value, "$", "$", 0)}</div>;
 }
 
-export default function ResponseViewer({ response }) {
+export default function ResponseViewer({ response, onSaveExample, canSaveExample }) {
   const [tab, setTab] = useState("body");
   const [bodyMode, setBodyMode] = useState("pretty"); // pretty | raw | preview
 
@@ -279,6 +279,44 @@ export default function ResponseViewer({ response }) {
   const [activeHit, setActiveHit] = useState(0);
 
   const [toast, setToast] = useState(null); // {msg}
+
+
+  const buildSuggestedExampleName = (exchange) => {
+    const method = String(exchange?.request?.method || "GET").toUpperCase();
+    const url = exchange?.request?.finalUrl || exchange?.request?.url || "";
+    let pathPart = "Example";
+    try {
+      const u = new URL(url);
+      const seg = u.pathname.split("/").filter(Boolean).slice(-1)[0] || "";
+      pathPart = seg ? seg : u.hostname;
+    } catch {
+      const seg = String(url).split("?")[0].split("/").filter(Boolean).slice(-1)[0] || "";
+      if (seg) pathPart = seg;
+    }
+    const status = exchange?.response?.status ? ` ${exchange.response.status}` : "";
+    return `${method} ${pathPart}${status}`.trim();
+  };
+
+  const handleSaveExampleClick = () => {
+    const exg = response?.exchange;
+    if (!exg || typeof onSaveExample !== "function") return;
+
+    const suggested = buildSuggestedExampleName(exg);
+    const name = window.prompt("Example name", suggested);
+    if (name === null) return;
+
+    const example = {
+      id: `ex_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      name: String(name || "").trim() || suggested,
+      createdAt: new Date().toISOString(),
+      request: exg.request || null,
+      response: exg.response || null,
+    };
+
+    onSaveExample(example);
+    setToast({ msg: "Saved example to Docs." });
+    setTimeout(() => setToast(null), 1600);
+  };
 
   // Reset to Body when a new response arrives (Postman-like)
   useEffect(() => {
@@ -502,6 +540,11 @@ export default function ResponseViewer({ response }) {
         </div>
 
         <div className="responseActions">
+          {canSaveExample && response?.exchange ? (
+            <button className="btn btnSm btnPrimary" type="button" onClick={handleSaveExampleClick} title="Save this response as an example (Docs)">
+              Save example
+            </button>
+          ) : null}
           <button className="btn btnSm" type="button" onClick={openSearch} title="Find in body (Ctrl+F)">
             Find
           </button>

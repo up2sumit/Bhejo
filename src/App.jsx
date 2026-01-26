@@ -34,6 +34,7 @@ import {
 
   // Phase 3: tree collections
   loadCollectionTrees,
+  updateRequestNodeRequest,
 } from "./utils/storage";
 import { normalizeEnvStore, envMerged, buildEnvNames } from "./utils/envs";
 
@@ -82,6 +83,11 @@ function blankDraft() {
     dataRows: [],
     mode: "direct",
     preRequestScript: "",
+    // Phase 6
+    docText: "",
+    examples: [],
+    defaultExampleId: null,
+    origin: null,
     savedAt: new Date().toISOString(),
   };
 }
@@ -506,6 +512,15 @@ export default function App() {
   const handleDraftChange = (draft, meta) => {
     if (!draft || !activeReqTabId) return;
 
+    // If this tab was opened from Collections tree, keep the node updated automatically
+    if (draft?.origin?.kind === "tree" && draft.origin.collectionId && draft.origin.nodeId) {
+      try {
+        updateRequestNodeRequest(draft.origin.collectionId, draft.origin.nodeId, draft);
+      } catch {
+        // ignore
+      }
+    }
+
     setReqTabs((tabs) =>
       tabs.map((t) => {
         if (t.id !== activeReqTabId) return t;
@@ -528,6 +543,8 @@ export default function App() {
   };
 
   const openFromPayload = (payload, { dirty = false } = {}) => {
+    const origin = payload?.__origin || payload?.origin || null;
+
     const draft = {
       id: payload.id || uuid("req"),
       name: payload.name || "",
@@ -542,8 +559,48 @@ export default function App() {
       dataRows: payload.dataRows || [],
       mode: payload.mode || "direct",
       preRequestScript: payload.preRequestScript || "",
+      // Phase 6
+      docText: payload.docText || "",
+      examples: Array.isArray(payload.examples) ? payload.examples : [],
+      defaultExampleId: payload.defaultExampleId || null,
+      origin,
       savedAt: new Date().toISOString(),
     };
+
+    // Collections tree: avoid opening the same endpoint in multiple tabs.
+    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
+      setReqTabs((prev) => {
+        const tabs = Array.isArray(prev) ? prev : [];
+        const idx = tabs.findIndex(
+          (t) =>
+            t?.draft?.origin?.kind === "tree" &&
+            t.draft.origin.collectionId === origin.collectionId &&
+            t.draft.origin.nodeId === origin.nodeId
+        );
+
+        if (idx !== -1) {
+          const existingId = tabs[idx].id;
+          setActiveReqTabId(existingId);
+
+          return tabs.map((t) =>
+            t.id === existingId
+              ? {
+                  ...t,
+                  draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() },
+                  dirty: dirty ? true : t.dirty,
+                }
+              : t
+          );
+        }
+
+        const tabId = uuid("tab");
+        const d = { ...blankDraft(), ...draft };
+        const tab = { id: tabId, draft: { ...d, savedAt: new Date().toISOString() }, dirty, lastResponse: null };
+        setActiveReqTabId(tabId);
+        return [tab, ...tabs];
+      });
+      return;
+    }
 
     newTab(draft, { activate: true, dirty });
   };
@@ -578,19 +635,59 @@ export default function App() {
   // Legacy Saved handlers (kept for now)
   // -----------------------
   const handleSaveRequest = (draft) => {
+    const origin =
+      activeReqTab?.draft?.origin ||
+      draft?.origin ||
+      draft?.__origin ||
+      null;
+
+    // If this tab was opened from Collections, save back into the same tree node (Postman-like)
+    if (origin?.kind === "tree" && origin.collectionId && origin.nodeId) {
+      try {
+        updateRequestNodeRequest(origin.collectionId, origin.nodeId, {
+          ...draft,
+          // keep linkage metadata in the in-memory draft (storage will normalize/ignore unknown keys)
+          origin,
+        });
+      } catch {
+        // ignore
+      }
+
+      // Mark current tab clean and bump savedAt so RequestBuilder re-syncs inputs
+      setReqTabs((tabs) =>
+        (tabs || []).map((t) =>
+          t.id === activeReqTabId
+            ? {
+                ...t,
+                dirty: false,
+                draft: {
+                  ...t.draft,
+                  ...draft,
+                  origin,
+                  savedAt: new Date().toISOString(),
+                },
+              }
+            : t
+        )
+      );
+
+      return;
+    }
+
+    // Fallback: save to legacy "Saved" list
     const updated = upsertSavedByName(draft);
     setSaved(updated);
     setSidebarTab("saved");
-    // mark current tab clean
+
+    // Mark current tab clean
     setReqTabs((tabs) =>
       (tabs || []).map((t) =>
         t.id === activeReqTabId
-          ? { ...t, dirty: false, draft: { ...t.draft, savedAt: new Date().toISOString() } }
+          ? { ...t, dirty: false, draft: { ...t.draft, ...draft, savedAt: new Date().toISOString() } }
           : t
       )
     );
   };
-
   const handleLoadSaved = (item) => {
     openFromPayload({
       id: item.id,
@@ -750,12 +847,14 @@ export default function App() {
       <div className="layout">
         {/* LEFT */}
         <div className="panel">
+          {sidebarTab !== "collections" ? (
           <div className="panelHeader">
             <div className="row" style={{ justifyContent: "space-between", width: "100%" }}>
               <div className="panelTitle">{tabTitle(sidebarTab)}</div>
               {sidebarHeaderRight}
             </div>
           </div>
+          ) : null}
 
           <div className="panelBody sidebarBody">
             {sidebarTab === "history" ? (
