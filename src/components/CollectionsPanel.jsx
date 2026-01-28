@@ -491,8 +491,8 @@ const loadRequestToEditor = (node) => {
     segs.push(tree.name);
     metaSegs.push({ type: "collection", label: tree.name, collectionId: tree.id });
   }
-  // pathNodes includes root -> ... -> request; drop root
-  for (const n of pathNodes.slice(1)) {
+  // buildNodePath already excludes root; includes folders + request
+  for (const n of pathNodes) {
     if (n?.name) {
       segs.push(n.name);
       metaSegs.push({

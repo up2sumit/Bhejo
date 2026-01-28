@@ -284,7 +284,7 @@ function resultsToJUnitXml({ suiteName, envName, results }) {
     .map((r) => {
       const name = r.name || r.id || "request";
       const classname = envName ? `bhejo.${envName}` : "bhejo";
-      const time = to.junitCaseTime = toSeconds(r.timeMs);
+      const time = toSeconds(r.timeMs);
 
       const t = classifyResult(r);
 

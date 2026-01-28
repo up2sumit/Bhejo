@@ -31,6 +31,61 @@ function getKeyFromEvent(e) {
   return `${source}::${name}::${method}::${url}`.trim();
 }
 
+// ✅ Strict transaction id
+// - Prefer traceId when present (correct pairing)
+// - Fallback to old heuristic key for legacy events that don’t carry traceId
+
+function typeWeight(type) {
+  // Ensure stable ordering inside a transaction:
+  // request -> response/error -> test logs (and other logs after)
+  switch (type) {
+    case "request":
+      return 10;
+    case "prerequest":
+    case "prerequest_error":
+      return 15;
+    case "response":
+    case "error":
+      return 20;
+    case "testscript_log":
+    case "test_log":
+      return 30;
+    default:
+      return 40;
+  }
+}
+
+function eventOrderKey(e) {
+  // Prefer seq if present (monotonic), else ts
+  const seq = typeof e?.seq === "number" ? e.seq : null;
+  const ts = e?.ts || "";
+  return { seq, ts, w: typeWeight(e?.type) };
+}
+
+function compareEvents(a, b) {
+  const ka = eventOrderKey(a);
+  const kb = eventOrderKey(b);
+
+  if (ka.seq !== null && kb.seq !== null && ka.seq !== kb.seq) return ka.seq - kb.seq;
+
+  // fallback to ts
+  if (ka.ts && kb.ts && ka.ts !== kb.ts) return ka.ts < kb.ts ? -1 : 1;
+
+  // same time => use type weight
+  if (ka.w !== kb.w) return ka.w - kb.w;
+
+  // final fallback: id
+  const ai = a?.id || "";
+  const bi = b?.id || "";
+  if (ai === bi) return 0;
+  return ai < bi ? -1 : 1;
+}
+function getTxnId(e) {
+  const tid = e?.data?.traceId;
+  if (tid) return `trace:${tid}`;
+  return `key:${getKeyFromEvent(e)}`;
+}
+
 function pillClass(level) {
   if (level === "error") return "pill pillErr";
   if (level === "warn") return "pill pillWarn";
@@ -42,6 +97,11 @@ function typePillClass(type) {
   if (type === "response") return "pill pillRes";
   if (type === "error") return "pill pillErr";
   return "pill";
+}
+
+function formatTypeLabel(type) {
+  if (!type) return "event";
+  return String(type).replace(/_/g, " ");
 }
 
 export default function ConsolePanel() {
@@ -103,50 +163,65 @@ export default function ConsolePanel() {
     return list;
   }, [events, query, filter]);
 
-  // CONNECTED: group request + response/error into a transaction
+  // ✅ CONNECTED (correct): group by traceId
   const grouped = useMemo(() => {
     // events are newest first
-    // We'll build groups scanning from oldest -> newest to pair properly.
+    // build groups from oldest -> newest so group.events stays chronological
     const chronological = [...filteredEvents].reverse();
 
-    const open = new Map(); // key -> last request event awaiting response
-    const groups = []; // { key, request, response, error }
+    const byId = new Map();
+    const groups = [];
 
     for (const e of chronological) {
-      const key = getKeyFromEvent(e);
+      const txnId = getTxnId(e);
+      let g = byId.get(txnId);
 
-      if (e.type === "request") {
-        // start a new transaction
-        const g = { key, request: e, response: null, error: null };
-        open.set(key + "::" + e.id, g);
+      if (!g) {
+        g = {
+          id: txnId,
+          traceId: e?.data?.traceId || null,
+          key: getKeyFromEvent(e),
+          request: null,
+          response: null,
+          error: null,
+          events: [],
+          lastTs: e?.ts || "",
+        };
+        byId.set(txnId, g);
         groups.push(g);
-      } else if (e.type === "response" || e.type === "error") {
-        // attach to the latest unmatched request for same key (best effort)
-        // find last open group with same base key and no response/error.
-        for (let i = groups.length - 1; i >= 0; i--) {
-          const g = groups[i];
-          if (g.key === key && g.request && !g.response && !g.error) {
-            if (e.type === "response") g.response = e;
-            else g.error = e;
-            break;
-          }
-        }
+      }
 
-        // If we didn’t find a request, show it as standalone group.
-        const attached = groups.some(
-          (g) => g.key === key && (g.response === e || g.error === e)
-        );
-        if (!attached) {
-          groups.push({ key, request: null, response: e.type === "response" ? e : null, error: e.type === "error" ? e : null });
-        }
-      } else {
-        // unknown type -> standalone
-        groups.push({ key, request: e, response: null, error: null });
+      g.events.push(e);
+      if (e?.ts) g.lastTs = e.ts;
+
+      if (e.type === "request") g.request = e;
+      else if (e.type === "response") g.response = e;
+      else if (e.type === "error") g.error = e;
+    }
+
+    // sort events inside each group (stable ordering)
+    for (const g of groups) {
+      g.events.sort(compareEvents);
+      // re-derive request/response/error pointers after sorting (last wins if multiple)
+      g.request = null;
+      g.response = null;
+      g.error = null;
+      for (const e of g.events) {
+        if (e.type === "request") g.request = e;
+        else if (e.type === "response") g.response = e;
+        else if (e.type === "error") g.error = e;
       }
     }
 
-    // show newest first
-    return groups.reverse();
+    // show newest group first (by lastTs)
+    groups.sort((a, b) => {
+      const at = a.lastTs || "";
+      const bt = b.lastTs || "";
+      if (at === bt) return 0;
+      return at < bt ? 1 : -1;
+    });
+
+    return groups;
   }, [filteredEvents]);
 
   const copy = async (obj) => {
@@ -166,8 +241,8 @@ export default function ConsolePanel() {
   const renderEventBlock = (e, label) => {
     if (!e) return null;
     const d = e.data || {};
-    const title =
-      d.name || d.finalUrl || d.url || d.message || "(event)";
+
+    const title = d.name || d.finalUrl || d.url || d.message || "(event)";
 
     return (
       <div className="consoleEventBlock">
@@ -175,13 +250,19 @@ export default function ConsolePanel() {
           <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
             <span className={pillClass(e.level)}>{(e.level || "info").toUpperCase()}</span>
             <span className={typePillClass(e.type)}>{label}</span>
-            <div className="consoleHeadline" title={title}>{title}</div>
+            <div className="consoleHeadline" title={title}>
+              {title}
+            </div>
           </div>
 
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <div className="consoleTime">{formatTs(e.ts)}</div>
-            <button className="btn btnSm" onClick={() => copy(e.data)}>Copy data</button>
-            <button className="btn btnSm" onClick={() => copy(e)}>Copy event</button>
+            <button className="btn btnSm" onClick={() => copy(e.data)}>
+              Copy data
+            </button>
+            <button className="btn btnSm" onClick={() => copy(e)}>
+              Copy event
+            </button>
           </div>
         </div>
 
@@ -196,7 +277,7 @@ export default function ConsolePanel() {
       <div className="consoleTop">
         <div className="consoleTitle">
           <div className="consoleH1">Console</div>
-          <div className="consoleSub">Live stream • Request ↔ Response connected</div>
+          <div className="consoleSub">Live stream • Request ↔ Response connected (traceId)</div>
         </div>
 
         <div className="consoleStats">
@@ -214,10 +295,16 @@ export default function ConsolePanel() {
           <button className={`tab ${filter === "all" ? "tabActive" : ""}`} onClick={() => setFilter("all")}>
             All
           </button>
-          <button className={`tab ${filter === "request" ? "tabActive" : ""}`} onClick={() => setFilter("request")}>
+          <button
+            className={`tab ${filter === "request" ? "tabActive" : ""}`}
+            onClick={() => setFilter("request")}
+          >
             Requests
           </button>
-          <button className={`tab ${filter === "response" ? "tabActive" : ""}`} onClick={() => setFilter("response")}>
+          <button
+            className={`tab ${filter === "response" ? "tabActive" : ""}`}
+            onClick={() => setFilter("response")}
+          >
             Responses
           </button>
           <button className={`tab ${filter === "error" ? "tabActive" : ""}`} onClick={() => setFilter("error")}>
@@ -259,9 +346,7 @@ export default function ConsolePanel() {
       {/* Body */}
       {grouped.length === 0 ? (
         <div className="consoleEmpty">
-          <div className="smallMuted">
-            No logs found{query.trim() ? " for this search." : "."}
-          </div>
+          <div className="smallMuted">No logs found{query.trim() ? " for this search." : "."}</div>
         </div>
       ) : (
         <div className="consoleList consoleListScroll" ref={listRef}>
@@ -271,38 +356,77 @@ export default function ConsolePanel() {
             const err = g.error;
 
             // transaction badge
-            const statusPill =
-              err ? (
-                <span className="pill pillErr">FAILED</span>
-              ) : res ? (
-                <span className="pill pillRes">DONE</span>
-              ) : (
-                <span className="pill pillWarn">PENDING</span>
-              );
+            const statusPill = err ? (
+              <span className="pill pillErr">FAILED</span>
+            ) : res ? (
+              <span className="pill pillRes">DONE</span>
+            ) : (
+              <span className="pill pillWarn">PENDING</span>
+            );
 
-            const method = req?.data?.method || res?.data?.method || "";
-            const url = req?.data?.finalUrl || res?.data?.finalUrl || "";
-            const name = req?.data?.name || res?.data?.name || err?.data?.name || `Transaction ${idx + 1}`;
+            const method =
+              req?.data?.method || res?.data?.method || err?.data?.method || "";
+            const url =
+              req?.data?.finalUrl ||
+              req?.data?.url ||
+              res?.data?.finalUrl ||
+              res?.data?.url ||
+              err?.data?.finalUrl ||
+              err?.data?.url ||
+              "";
+            const name =
+              req?.data?.name ||
+              res?.data?.name ||
+              err?.data?.name ||
+              req?.data?.finalUrl ||
+              res?.data?.finalUrl ||
+              err?.data?.finalUrl ||
+              `Transaction ${idx + 1}`;
+
+            // middle events (prerequest/testscript logs, etc.)
+            const middle = (g.events || []).filter(
+              (e) => !["request", "response", "error"].includes(e.type)
+            );
 
             return (
-              <div key={`${g.key}_${idx}`} className="consoleTxn">
+              <div key={`${g.id}_${idx}`} className="consoleTxn">
                 <div className="consoleTxnHeader">
                   <div className="consoleTxnLeft">
                     {statusPill}
                     <span className="badge">{method || "—"}</span>
+                    {g.traceId ? (
+                      <span className="badge" title={g.traceId}>
+                        trace:{String(g.traceId).slice(0, 8)}
+                      </span>
+                    ) : null}
                     <div className="consoleTxnTitle" title={url || name}>
                       {name}
                     </div>
                   </div>
 
                   <div className="consoleTxnRight">
-                    {url ? <span className="smallMuted" style={{ fontFamily: "var(--mono)" }}>{url}</span> : null}
+                    {url ? (
+                      <span className="smallMuted" style={{ fontFamily: "var(--mono)" }}>
+                        {url}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className="consoleTxnBody">
                   {renderEventBlock(req, "request")}
-                  <div className="consoleLinkLine" />
+
+                  {middle.length ? <div className="consoleLinkLine" /> : null}
+
+                  {middle.map((e, i) => (
+                    <div key={`${g.id}_mid_${i}`}>
+                      {renderEventBlock(e, formatTypeLabel(e.type))}
+                      {i !== middle.length - 1 ? <div className="consoleLinkLine" /> : null}
+                    </div>
+                  ))}
+
+                  {(res || err) ? <div className="consoleLinkLine" /> : null}
+
                   {renderEventBlock(res, "response")}
                   {renderEventBlock(err, "error")}
                 </div>

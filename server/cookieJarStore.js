@@ -141,6 +141,21 @@ export async function flushJar(jarId) {
   await writeJarToDisk(id, entry.jar);
 }
 
+
+export async function listJarIds() {
+  await ensureDir();
+  try {
+    const files = await fs.readdir(DATA_DIR);
+    return (files || [])
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.replace(/\.json$/i, ""))
+      .filter(Boolean)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 // Best-effort flush on shutdown (helps avoid losing last cookies)
 process.on("SIGINT", async () => {
   try {

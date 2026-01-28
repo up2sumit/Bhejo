@@ -272,8 +272,7 @@ export function exportDocsHtml({ savedRequests = [], collections = [] }) {
     details{ margin-top:8px; }
     summary{ cursor:pointer; color:var(--accent); font-weight:800; }
     pre{ margin:8px 0 0; padding:10px; overflow:auto; border-radius:12px; background:rgba(0,0,0,0.22); border:1px solid rgba(255,255,255,0.08); }
-    @media (max-width: 980px){
-      .wrap{ grid-template-columns: 1fr; }
+    @media (max-width: 980px){ ...wrap{ grid-template-columns: 1fr; }
       .side{ position:relative; height:auto; border-right:none; border-bottom:1px solid var(--border); }
     }
   </style>

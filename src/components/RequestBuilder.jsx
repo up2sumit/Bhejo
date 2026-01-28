@@ -7,6 +7,7 @@ import AuthEditor, { applyAuthToHeaders } from "./AuthEditor";
 import TestsEditor from "./TestsEditor";
 import DataEditor from "./DataEditor";
 import DocsEditor from "./DocsEditor";
+import AgentConfigPanel from "./AgentConfigPanel.jsx";
 
 import { applyVarsToRequest, createVarMeta, metaToPlain, resolveTemplateSegments } from "../utils/vars";
 import { runAssertions } from "../utils/assertions";
@@ -24,6 +25,25 @@ import {
 import { runTestScriptSafe as runTestScript } from "../utils/testRuntimeSafe";
 
 const PROXY_URL = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
+const AGENT_DEFAULT_BASE_URL = "http://127.0.0.1:3131";
+
+function loadLS(key, fallback = "") {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLS(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(value));
+  } catch {
+    // ignore
+  }
+}
 
 function getCookieJarId() {
   // Stable id so the proxy can persist cookies per user session
@@ -522,6 +542,23 @@ export default function RequestBuilder({
   const [tab, setTab] = useState("params");
   const [mode, setMode] = useState(initial?.mode || "direct");
 
+  // Phase 3: Agent (local network bridge)
+  const [agentBaseUrl, setAgentBaseUrl] = useState(
+    () => (loadLS("bhejo_agent_baseUrl", AGENT_DEFAULT_BASE_URL) || AGENT_DEFAULT_BASE_URL).trim()
+  );
+  const [agentToken, setAgentToken] = useState(() => (loadLS("bhejo_agent_token", "") || "").trim());
+  const [agentPairCode, setAgentPairCode] = useState("");
+  const [agentMsg, setAgentMsg] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+
+  useEffect(() => {
+    saveLS("bhejo_agent_baseUrl", agentBaseUrl || "");
+  }, [agentBaseUrl]);
+
+  useEffect(() => {
+    saveLS("bhejo_agent_token", agentToken || "");
+  }, [agentToken]);
+
   // Phase 5: Resolve preview (missing vars + colored tokens)
   const [showResolvePreview, setShowResolvePreview] = useState(false);
   const [resolveTab, setResolveTab] = useState("url");
@@ -1008,6 +1045,37 @@ const validateForCopy = () => {
     };
   };
 
+  const pairAgent = async () => {
+    const code = String(agentPairCode || "").trim();
+    if (!code) {
+      setAgentMsg("Enter the pair code shown in agent terminal.");
+      return;
+    }
+    const base = (agentBaseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
+    setAgentBusy(true);
+    setAgentMsg("Pairing...");
+    try {
+      const res = await fetch(`${base}/pair`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairCode: code }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok || !data?.token) {
+        const msg = data?.error?.message || data?.message || "Pairing failed";
+        throw new Error(msg);
+      }
+      setAgentToken(data.token);
+      setAgentPairCode("");
+      setAgentMsg("Paired ✔");
+    } catch (e) {
+      setAgentMsg(e?.message || "Pairing failed");
+    } finally {
+      setAgentBusy(false);
+      setTimeout(() => setAgentMsg(""), 2000);
+    }
+  };
+
   const sendRequest = async () => {
     if (!validate()) return;
 
@@ -1018,6 +1086,9 @@ const validateForCopy = () => {
     const traceId = uuid("trace");
     const start = performance.now();
     setLoading(true);
+
+    let metaMethod = method;
+    let metaFinalUrl = url;
 
     try {
       // 1) run pre-request script first (can mutate draft)
@@ -1041,6 +1112,9 @@ const validateForCopy = () => {
       const draftResolved = applyVarsToRequest(draftAfterScript, envVars);
 
       const finalUrl = buildFinalUrl(draftResolved.url, draftResolved.params);
+
+      metaMethod = draftResolved.method;
+      metaFinalUrl = finalUrl;
 
       let headerObj = buildHeadersObject(draftResolved.headers);
       headerObj = applyAuthToHeaders(draftResolved.auth, headerObj);
@@ -1076,8 +1150,16 @@ const validateForCopy = () => {
       });
 
       let resStatus, resStatusText, resHeaders, rawText;
+      let isBase64 = false;
+      let contentType = "";
+      let sizeBytes = 0;
+      let redirectChain = [];
+      let finalResolvedUrl = finalUrl;
+      let proxySource = "";
 
-      if ((draftResolved.mode || "direct") === "direct") {
+      const execMode = String(draftResolved.mode || "direct").toLowerCase();
+
+      if (execMode === "direct") {
         const options = {
           method: draftResolved.method,
           headers: { ...headerObj },
@@ -1143,6 +1225,66 @@ const validateForCopy = () => {
         resHeaders = rHeaders;
 
         rawText = await res.text();
+      } else if (execMode === "agent") {
+        const bm = String(draftResolved.bodyMode || "json").toLowerCase();
+        if (bm === "formdata") {
+          throw new Error("Agent mode does not support multipart form-data yet. Use Proxy mode for this request.");
+        }
+
+        const base = (agentBaseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
+        const tok = String(agentToken || "").trim();
+        if (!tok) throw new Error("Agent token missing. Pair the agent first.");
+
+        // Build body in a transport-friendly format (raw / form-url)
+        let bodyPayload = { mode: "none" };
+        if (!["GET", "HEAD"].includes(draftResolved.method)) {
+          if (bm === "formurl") {
+            bodyPayload = {
+              mode: "form-url",
+              items: (draftResolved.bodyFormUrl || []).map((r) => ({
+                key: String(r?.key || ""),
+                value: String(r?.value ?? ""),
+                enabled: r?.enabled !== false,
+              })),
+            };
+          } else {
+            bodyPayload = {
+              mode: "raw",
+              raw: String(draftResolved.body || ""),
+              contentType: headerObj?.["Content-Type"] || headerObj?.["content-type"] || "",
+            };
+          }
+        }
+
+        const agentRes = await fetch(`${base}/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-bhejo-token": tok },
+          signal: controller.signal,
+          body: JSON.stringify({
+            method: draftResolved.method,
+            url: finalUrl,
+            headers: Object.entries(headerObj || {}).map(([key, value]) => ({ key, value })),
+            body: bodyPayload,
+          }),
+        });
+
+        const data = await agentRes.json().catch(() => null);
+        if (!agentRes.ok || !data?.ok) {
+          const msg = data?.error?.message || data?.message || "Agent error";
+          throw new Error(msg);
+        }
+
+        const r = data.result || {};
+        resStatus = r.status;
+        resStatusText = r.statusText || "";
+        resHeaders = r.headers || {};
+        rawText = r.body || "";
+        isBase64 = !!r.isBase64;
+        contentType = r.contentType || r.headers?.["content-type"] || "";
+        sizeBytes = r.sizeBytes || 0;
+        redirectChain = Array.isArray(r.redirectChain) ? r.redirectChain : [];
+        finalResolvedUrl = r.finalUrl || finalUrl;
+        proxySource = r.proxySource || "agent";
       } else {
         const bm = String(draftResolved.bodyMode || "json").toLowerCase();
 
@@ -1214,16 +1356,24 @@ const validateForCopy = () => {
         resStatusText = data.statusText || "";
         resHeaders = data.headers || {};
         rawText = data.body || "";
+        isBase64 = !!data.isBase64;
+        contentType = data.contentType || data.headers?.["content-type"] || "";
+        sizeBytes = data.sizeBytes || 0;
+        redirectChain = Array.isArray(data.redirectChain) ? data.redirectChain : [];
+        finalResolvedUrl = data.finalUrl || finalUrl;
+        proxySource = data.proxySource || "proxy";
       }
 
       const end = performance.now();
       const timeMs = Math.round(end - start);
 
       let parsedJson = null;
-      try {
-        parsedJson = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        parsedJson = null;
+      if (!isBase64) {
+        try {
+          parsedJson = rawText ? JSON.parse(rawText) : null;
+        } catch {
+          parsedJson = null;
+        }
       }
 
       const testReport = runAssertions({
@@ -1307,6 +1457,12 @@ const validateForCopy = () => {
             headers: resHeaders,
             rawText,
             json: parsedJson,
+            isBase64,
+            contentType,
+            sizeBytes,
+            redirectChain,
+            finalUrl: finalResolvedUrl,
+            proxySource: execMode === "direct" ? "off" : (proxySource || execMode),
           },
         };
         lastExchangeRef.current = exchangeObj;
@@ -1322,6 +1478,12 @@ const validateForCopy = () => {
         headers: resHeaders,
         rawText,
         json: parsedJson,
+        isBase64,
+        contentType,
+        sizeBytes,
+        redirectChain,
+        finalUrl: finalResolvedUrl,
+        proxySource: execMode === "direct" ? "off" : (proxySource || execMode),
         testReport,
         scriptTestReport,
         exchange: exchangeObj,
@@ -1335,10 +1497,12 @@ const validateForCopy = () => {
           traceId,
           source: "requestBuilder",
           name: (requestName || "").trim(),
+          method: metaMethod,
+          finalUrl: metaFinalUrl,
           status: resStatus,
           timeMs,
           headers: resHeaders,
-          body: rawText,
+          body: isBase64 ? `<base64:${sizeBytes || 0} bytes>` : rawText,
           tests: {
             builder: { passed: testReport.passed, total: testReport.total },
             script: scriptTestReport
@@ -1394,6 +1558,8 @@ const validateForCopy = () => {
           traceId,
           source: "requestBuilder",
           name: (requestName || "").trim(),
+          method: metaMethod,
+          finalUrl: metaFinalUrl,
           message: err?.name === "AbortError" ? "Aborted" : err?.message || "Request failed",
         },
       });
@@ -2263,8 +2429,82 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           >
             Proxy
           </button>
+          <button
+            className={`tab ${mode === "agent" ? "tabActive" : ""}`}
+            onClick={() => setMode("agent")}
+            title="Use Bhejo Agent to reach internal network APIs"
+          >
+            Agent
+          </button>
         </div>
       </div>
+
+      {mode === "agent" ? (
+        <div className="card" style={{ padding: 12, marginTop: 10 }}>
+          <div className="row" style={{ gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800, fontSize: 13 }}>Bhejo Agent</div>
+            <span className="smallMuted">Local bridge for intranet-only APIs</span>
+            {agentToken ? (
+              <span className="badge" style={{ background: "rgba(46, 204, 113, 0.14)", border: "1px solid rgba(46, 204, 113, 0.35)", color: "var(--success)" }}>
+                Paired
+              </span>
+            ) : (
+              <span className="badge" style={{ background: "rgba(255, 70, 70, 0.15)", border: "1px solid rgba(255, 70, 70, 0.35)", color: "var(--danger)" }}>
+                Not paired
+              </span>
+            )}
+          </div>
+
+          <div className="row" style={{ gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 260, flex: 1 }}>
+              <div className="smallMuted" style={{ marginBottom: 6 }}>Agent base URL</div>
+              <input
+                className="input"
+                value={agentBaseUrl}
+                onChange={(e) => setAgentBaseUrl(e.target.value)}
+                placeholder={AGENT_DEFAULT_BASE_URL}
+              />
+            </div>
+
+            <div style={{ minWidth: 200 }}>
+              <div className="smallMuted" style={{ marginBottom: 6 }}>Pair code</div>
+              <input
+                className="input"
+                value={agentPairCode}
+                onChange={(e) => setAgentPairCode(e.target.value)}
+                placeholder="e.g. 56115c93"
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "end", gap: 8 }}>
+              <button className="btn" type="button" onClick={pairAgent} disabled={agentBusy}>
+                Pair
+              </button>
+              <button
+                className="btn btnSm"
+                type="button"
+                onClick={() => {
+                  setAgentToken("");
+                  setAgentMsg("Unpaired");
+                  setTimeout(() => setAgentMsg(""), 1500);
+                }}
+                disabled={agentBusy || !agentToken}
+              >
+                Unpair
+              </button>
+            </div>
+          </div>
+
+          {agentMsg ? <div className="smallMuted" style={{ marginTop: 8 }}>{agentMsg}</div> : null}
+
+          <AgentConfigPanel
+            baseUrl={agentBaseUrl}
+            token={agentToken}
+            onBaseUrl={setAgentBaseUrl}
+            onToken={setAgentToken}
+          />
+        </div>
+      ) : null}
 
 {showResolvePreview ? (
   <div className="card" style={{ padding: 12, marginTop: 10 }}>

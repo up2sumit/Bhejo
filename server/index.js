@@ -19,8 +19,8 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 // Payload size: multipart uploads via proxy are base64 in JSON (bigger than raw file)
-app.use(express.json({ limit: "25mb" }));
-app.use(express.text({ type: "*/*", limit: "25mb" }));
+app.use(express.json({ limit: "35mb" }));
+app.use(express.text({ type: "*/*", limit: "35mb" }));
 
 app.use(
   cors({
@@ -71,6 +71,32 @@ function sanitizeOutgoingHeaders(headers) {
     clean[key] = v;
   }
   return clean;
+}
+
+
+function isTextLikeContentType(ct) {
+  const t = String(ct || "").toLowerCase();
+  if (!t) return true; // unknown -> treat as text to avoid base64 bloat
+  if (t.startsWith("text/")) return true;
+  if (t.includes("json")) return true;
+  if (t.includes("xml")) return true;
+  if (t.includes("javascript")) return true;
+  if (t.includes("x-www-form-urlencoded")) return true;
+  if (t.includes("graphql")) return true;
+  return false;
+}
+
+function getFilenameFromContentDisposition(cd) {
+  const s = String(cd || "");
+  if (!s) return "";
+  // filename*=UTF-8''... or filename="..."
+  let m = s.match(/filename\*=UTF-8''([^;]+)/i);
+  if (m && m[1]) {
+    try { return decodeURIComponent(m[1].trim().replace(/^"|"$/g, "")); } catch { return m[1].trim(); }
+  }
+  m = s.match(/filename=([^;]+)/i);
+  if (m && m[1]) return m[1].trim().replace(/^"|"$/g, "");
+  return "";
 }
 
 function decodeBase64ToUint8(base64) {
@@ -196,45 +222,211 @@ function upsertCookie(jar, hostname, cookie) {
   jar.set(host, next);
 }
 
-function buildCookieHeader(jar, requestUrl) {
+
+function resolveCookiesForUrl(jar, requestUrl, options = {}) {
   const u = new URL(requestUrl);
   const host = u.hostname.toLowerCase();
   const path = u.pathname || "/";
   const isHttps = u.protocol === "https:";
+
+  const siteOrigin = options.siteOrigin ? String(options.siteOrigin) : "";
+  let siteHost = "";
+  try {
+    siteHost = siteOrigin ? new URL(siteOrigin).hostname.toLowerCase() : "";
+  } catch {
+    siteHost = "";
+  }
+  const isCrossSite = !!(siteHost && siteHost !== host);
+
+  const manualCookieHeader = options.manualCookieHeader ? String(options.manualCookieHeader) : "";
 
   const allCookies = [];
   for (const [, list] of jar.entries()) {
     if (Array.isArray(list)) allCookies.push(...list);
   }
 
-  const candidates = allCookies.filter((c) => {
-    if (!c || isExpired(c)) return false;
-    if (c.secure && !isHttps) return false;
+  const sentCandidates = [];
+  const excluded = [];
 
-    if (c.hostOnly) {
-      if (String(c.domain).toLowerCase() !== host) return false;
-    } else {
-      if (!domainMatches(c.domain, host)) return false;
+  const normalizeSameSite = (v) => String(v || "").toLowerCase(); // "lax" | "strict" | "none" | ""
+  const effectiveSameSite = (c) => {
+    const ss = normalizeSameSite(c.sameSite);
+    // Modern browsers default to Lax when unspecified; Postman-like debug is more useful with that assumption.
+    return ss || "lax";
+  };
+
+  for (const c of allCookies) {
+    if (!c) continue;
+
+    const base = {
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      hostOnly: !!c.hostOnly,
+      path: c.path || "/",
+      secure: !!c.secure,
+      httpOnly: !!c.httpOnly,
+      sameSite: c.sameSite || "",
+      expiresAt: c.expiresAt ?? null,
+    };
+
+    const reasons = [];
+    const notes = [];
+
+    // Notes (not blockers)
+    if (c.httpOnly) notes.push("HttpOnly: not accessible to scripts");
+
+    // Expiry
+    if (isExpired(c)) {
+      reasons.push("Expired");
+      excluded.push({ ...base, reasons, notes });
+      continue;
     }
 
-    if (!pathMatches(c.path, path)) return false;
-    return true;
-  });
+    // Secure over http
+    if (c.secure && !isHttps) {
+      reasons.push("Secure cookie over HTTP");
+      excluded.push({ ...base, reasons, notes });
+      continue;
+    }
 
-  if (!candidates.length) return "";
+    // SameSite=None requires Secure
+    const ssEff = effectiveSameSite(c); // lax/strict/none
+    if (ssEff === "none" && !c.secure) {
+      reasons.push("SameSite=None requires Secure");
+      excluded.push({ ...base, reasons, notes });
+      continue;
+    }
 
-  // Most specific path wins
-  candidates.sort((a, b) => (b.path || "").length - (a.path || "").length);
+    // SameSite cross-site blocking (XHR/fetch)
+    if (isCrossSite) {
+      if (ssEff === "strict") {
+        reasons.push("SameSite=Strict blocks cross-site requests");
+        excluded.push({ ...base, reasons, notes });
+        continue;
+      }
+      if (ssEff === "lax") {
+        reasons.push("SameSite=Lax blocks cross-site XHR/fetch");
+        excluded.push({ ...base, reasons, notes });
+        continue;
+      }
+      // none => allowed (if secure requirement satisfied)
+    }
+
+    // domain match
+    if (c.hostOnly) {
+      if (String(c.domain).toLowerCase() !== host) {
+        reasons.push("Host-only domain mismatch");
+        excluded.push({ ...base, reasons, notes });
+        continue;
+      }
+    } else {
+      if (!domainMatches(c.domain, host)) {
+        reasons.push("Domain mismatch");
+        excluded.push({ ...base, reasons, notes });
+        continue;
+      }
+    }
+
+    // path match
+    if (!pathMatches(c.path, path)) {
+      reasons.push("Path mismatch");
+      excluded.push({ ...base, reasons, notes });
+      continue;
+    }
+
+    // Candidate to send
+    sentCandidates.push({ c, base, notes, ssEff });
+  }
+
+  // Most specific path wins for sent candidates
+  sentCandidates.sort((a, b) => (b.c.path || "").length - (a.c.path || "").length);
 
   const seen = new Set();
+  const sentCookies = [];
   const pairs = [];
-  for (const c of candidates) {
-    if (seen.has(c.name)) continue;
+
+  for (const item of sentCandidates) {
+    const c = item.c;
+    const base = item.base;
+    const notes = item.notes;
+
+    if (seen.has(c.name)) {
+      excluded.push({
+        ...base,
+        reasons: ["Overridden by a more specific cookie with the same name"],
+        notes,
+      });
+      continue;
+    }
     seen.add(c.name);
+
+    const whyParts = [];
+    if (c.hostOnly) whyParts.push("Host-only match");
+    else whyParts.push("Domain match");
+    whyParts.push(`Path match (${c.path || "/"})`);
+    whyParts.push(c.secure ? "Secure" : "Not secure");
+    whyParts.push(`SameSite=${String(c.sameSite || "default(Lax)")}`);
+
+    sentCookies.push({
+      ...base,
+      whyParts,
+      notes,
+    });
+
     pairs.push(`${c.name}=${c.value}`);
   }
 
-  return pairs.join("; ");
+  const header = pairs.join("; ");
+
+  // Manual Cookie header overrides jar cookies (debug explains why)
+  if (manualCookieHeader) {
+    const overridden = sentCookies.map((c) => ({
+      ...c,
+      reasons: ["Overridden by manual Cookie header"],
+      notes: c.notes || [],
+    }));
+    const excl = excluded.map((c) => ({
+      ...c,
+      reasons: Array.isArray(c.reasons) && c.reasons.length
+        ? [...c.reasons, "Manual Cookie header present"]
+        : ["Manual Cookie header present"],
+    }));
+
+    return {
+      host,
+      path,
+      isHttps,
+      isCrossSite,
+      siteOrigin: siteOrigin || "",
+      header: manualCookieHeader,
+      count: manualCookieHeader.split(";").map((x) => x.trim()).filter(Boolean).length,
+      cookiesSent: [],
+      cookiesExcluded: [...overridden, ...excl],
+      manualOverride: true,
+    };
+  }
+
+  return {
+    host,
+    path,
+    isHttps,
+    isCrossSite,
+    siteOrigin: siteOrigin || "",
+    header,
+    count: sentCookies.length,
+    cookiesSent: sentCookies,
+    cookiesExcluded: excluded,
+    manualOverride: false,
+  };
+}
+
+
+
+
+function buildCookieHeader(jar, requestUrl) {
+  const resolved = resolveCookiesForUrl(jar, requestUrl);
+  return resolved.header || "";
 }
 
 function getSetCookiesFromFetchResponse(res) {
@@ -274,6 +466,39 @@ app.get("/cookiejar", async (req, res) => {
 
   res.json({ jarId, count: out.length, cookies: out });
 });
+
+app.get("/cookiejar/resolve", async (req, res) => {
+  try {
+    const jarId = String(req.query?.jarId || "default");
+    const url = String(req.query?.url || "");
+    if (!url) return res.status(400).json({ error: "Missing url" });
+    if (!isAllowedTarget(url)) {
+      return res.status(403).json({ error: "Target host not allowed", allowed: Array.from(ALLOWED_HOSTS) });
+    }
+    const jar = await getJar(jarId);
+    const siteOrigin = String(req.query?.siteOrigin || "");
+    const resolved = resolveCookiesForUrl(jar, url, { siteOrigin });
+    res.json({
+      ok: true,
+      jarId,
+      url,
+      host: resolved.host,
+      path: resolved.path,
+      isHttps: resolved.isHttps,
+      header: resolved.header,
+      count: resolved.count,
+      cookies: resolved.cookiesSent || [],
+      cookiesSent: resolved.cookiesSent || [],
+      cookiesExcluded: resolved.cookiesExcluded || [],
+      manualOverride: !!resolved.manualOverride,
+      siteOrigin: resolved.siteOrigin || "",
+      isCrossSite: !!resolved.isCrossSite,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to resolve cookies", message: e?.message || String(e) });
+  }
+});
+
 
 app.post("/cookiejar/clear", async (req, res) => {
   const jarId = String(req.body?.jarId || "default");
@@ -325,6 +550,14 @@ app.post("/proxy", async (req, res) => {
 
   const jar = jarEnabled ? await getJar(jarId) : null;
 
+  // Cookie debug (Postman-like)
+  let cookieSentHeader = "";
+  let cookieSentFrom = jarEnabled ? "jar-empty" : "disabled";
+  let cookieSentCount = 0;
+  let cookieSentCookies = [];
+  let cookieExcludedCookies = [];
+
+
   // Abort / timeout
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), Number(timeoutMs || 30000));
@@ -337,9 +570,24 @@ app.post("/proxy", async (req, res) => {
 
     // If cookie jar enabled and caller didn't send Cookie explicitly, add Cookie header
     const hasCookieHeader = Object.keys(outHeaders).some((k) => k.toLowerCase() === "cookie");
-    if (jar && !hasCookieHeader) {
-      const cookieHeader = buildCookieHeader(jar, url);
-      if (cookieHeader) outHeaders = { ...outHeaders, Cookie: cookieHeader };
+
+    if (hasCookieHeader) {
+      cookieSentFrom = "manual";
+      cookieSentHeader = String(outHeaders.Cookie || outHeaders.cookie || "");
+      if (jar) {
+        const resolvedManual = resolveCookiesForUrl(jar, url, { manualCookieHeader: cookieSentHeader, siteOrigin });
+        cookieSentCount = resolvedManual.count || 0;
+        cookieExcludedCookies = resolvedManual.cookiesExcluded || [];
+      }
+    } else if (jar) {
+      const siteOrigin = String(req.query?.siteOrigin || "");
+    const resolved = resolveCookiesForUrl(jar, url, { siteOrigin });
+      cookieSentHeader = resolved.header || "";
+      cookieSentCount = resolved.count || 0;
+      cookieSentCookies = resolved.cookiesSent || [];
+      cookieExcludedCookies = resolved.cookiesExcluded || [];
+      cookieSentFrom = cookieSentHeader ? "jar" : "jar-empty";
+      if (cookieSentHeader) outHeaders = { ...outHeaders, Cookie: cookieSentHeader };
     }
 
     let requestBody = undefined;
@@ -399,15 +647,39 @@ app.post("/proxy", async (req, res) => {
       markDirty(jarId);
     }
 
-    const raw = await upstream.text();
     const outHeadersResp = sanitizeOutgoingHeaders(upstream.headers);
+
+    const ct = upstream.headers.get("content-type") || outHeadersResp["content-type"] || "";
+    const cd = upstream.headers.get("content-disposition") || outHeadersResp["content-disposition"] || "";
+    const filename = getFilenameFromContentDisposition(cd);
+
+    let body = "";
+    let bodyBase64 = "";
+    let isBase64 = false;
+    let sizeBytes = 0;
+
+    if (isTextLikeContentType(ct)) {
+      body = await upstream.text();
+      try { sizeBytes = Buffer.byteLength(body, "utf8"); } catch { sizeBytes = body.length; }
+    } else {
+      const ab = await upstream.arrayBuffer();
+      const buf = Buffer.from(ab);
+      bodyBase64 = buf.toString("base64");
+      isBase64 = true;
+      sizeBytes = buf.length;
+    }
 
     return res.json({
       ok: upstream.ok,
       status: upstream.status,
       statusText: upstream.statusText,
       headers: outHeadersResp,
-      body: raw,
+      body,
+      bodyBase64,
+      isBase64,
+      contentType: ct,
+      filename,
+      sizeBytes,
       setCookie: setCookies,
       jarId: jarEnabled ? jarId : null,
     });
