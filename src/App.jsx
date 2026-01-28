@@ -5,6 +5,7 @@ import ResponseViewer from "./components/ResponseViewer";
 import HistoryPanel from "./components/HistoryPanel";
 import SavedPanel from "./components/SavedPanel";
 import EnvPanel from "./components/EnvPanel";
+import CookiesPanel from "./components/CookiesPanel";
 import RunnerPanel from "./components/RunnerPanel";
 import ToolsPanel from "./components/ToolsPanel";
 import CollectionsPanel from "./components/CollectionsPanel";
@@ -157,7 +158,7 @@ export default function App() {
   // Phase 3 tree collections count (badge)
   const [treeCollectionsCount, setTreeCollectionsCount] = useState(0);
 
-  const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | collections | runner | tools
+  const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | cookies | collections | runner | tools
   const prevSidebarTabRef = useRef("collections");
   const effectiveSidebarTab = sidebarTab === "runner" ? prevSidebarTabRef.current : sidebarTab;
 
@@ -728,6 +729,15 @@ useEffect(() => {
             aria-selected={sidebarTab === "env"}
           >
             Env
+          </button>
+
+          <button
+            className={`topNavBtn ${sidebarTab === "cookies" ? "active" : ""}`}
+            onClick={() => goToTab("cookies")}
+            role="tab"
+            aria-selected={sidebarTab === "cookies"}
+          >
+            Cookies
           </button>
           <button
             className={`topNavBtn ${sidebarTab === "collections" ? "active" : ""}`}

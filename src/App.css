@@ -4550,3 +4550,41 @@ select.envChipSelect{
   overflow: auto;
   padding: 10px;
 }
+.agentSettingsBox{
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:14px;
+  padding:12px;
+  margin-top:10px;
+  background:rgba(0,0,0,0.12);
+}
+.agentSettingsRow{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+}
+.agentGrid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:12px;
+  margin-top:12px;
+}
+.agentLbl{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  font-size:12px;
+  color: rgba(255,255,255,0.8);
+}
+.agentCustomBox{
+  grid-column: 1 / -1;
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px;
+  padding:10px;
+  background: rgba(0,0,0,0.10);
+}
+.agentCustomRow{
+  display:grid;
+  grid-template-columns: 140px 1fr 140px;
+  gap:10px;
+}

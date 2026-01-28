@@ -15,6 +15,17 @@ import { runPreRequestScript } from "./scriptRuntime";
 import { runTestScriptSafe as runTestScript } from "./testRuntimeSafe";
 
 const PROXY_URL = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
+const AGENT_DEFAULT_BASE_URL = "http://127.0.0.1:3131";
+
+function getAgentConfig() {
+  try {
+    const baseUrl = (localStorage.getItem("bhejo_agent_baseUrl") || AGENT_DEFAULT_BASE_URL).trim();
+    const token = (localStorage.getItem("bhejo_agent_token") || "").trim();
+    return { baseUrl: baseUrl || AGENT_DEFAULT_BASE_URL, token };
+  } catch {
+    return { baseUrl: AGENT_DEFAULT_BASE_URL, token: "" };
+  }
+}
 
 function uuid(prefix = "id") {
   return (
@@ -116,6 +127,52 @@ async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
     statusText: data.statusText || "",
     headers: data.headers || {},
     rawText: data.body || "",
+  };
+}
+
+async function runViaAgent({ finalUrl, method, headersObj, bodyText, signal }) {
+  const { baseUrl, token } = getAgentConfig();
+  if (!token) throw new Error("Agent token missing. Pair the agent from UI first.");
+
+  const headersArr = Object.entries(headersObj || {}).map(([key, value]) => ({ key, value }));
+  const payload = {
+    method,
+    url: finalUrl,
+    headers: headersArr,
+    body: !["GET", "HEAD"].includes(method)
+      ? {
+          mode: "raw",
+          raw: bodyText || "",
+          contentType: headersObj?.["Content-Type"] || headersObj?.["content-type"] || "",
+        }
+      : { mode: "none" },
+  };
+
+  const agentRes = await fetch(`${baseUrl.replace(/\/$/, "")}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-bhejo-token": token },
+    signal,
+    body: JSON.stringify(payload),
+  });
+
+  const data = await agentRes.json().catch(() => null);
+  if (!agentRes.ok || !data?.ok) {
+    const msg = data?.error?.message || data?.message || "Agent error";
+    throw new Error(msg);
+  }
+
+  const r = data.result || {};
+  return {
+    status: r.status,
+    statusText: r.statusText || "",
+    headers: r.headers || {},
+    rawText: r.body || "",
+    isBase64: !!r.isBase64,
+    contentType: r.contentType || r.headers?.["content-type"] || "",
+    sizeBytes: r.sizeBytes || 0,
+    redirectChain: Array.isArray(r.redirectChain) ? r.redirectChain : [],
+    finalUrl: r.finalUrl || finalUrl,
+    proxySource: r.proxySource || "agent",
   };
 }
 
@@ -236,6 +293,9 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
     const traceId = uuid("trace");
     const start = performance.now();
 
+    let metaMethod = String(req.method || "GET").toUpperCase();
+    let metaFinalUrl = String(req.url || "");
+
     try {
       // mergedVarsBase = global env + row vars (row vars only for this iteration)
       const mergedVarsBase = { ...globalVars, ...(item.rowVars || {}) };
@@ -321,6 +381,9 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
 
       const finalUrl = buildFinalUrl(finalDraft.url, finalDraft.params);
 
+      metaMethod = String(finalDraft.method || metaMethod).toUpperCase();
+      metaFinalUrl = finalUrl;
+
       let headerObj = headersArrayToObject(finalDraft.headers);
       headerObj = applyAuthToHeaders(finalDraft.auth, headerObj);
 
@@ -352,10 +415,18 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         },
       });
 
-      // 2) Execute request (direct or proxy)
+      // 2) Execute request (direct | proxy | agent)
       let status, statusText, headers, rawText;
+      let isBase64 = false;
+      let contentType = "";
+      let sizeBytes = 0;
+      let redirectChain = [];
+      let finalResolvedUrl = finalUrl;
+      let proxySource = "";
 
-      if ((finalDraft.mode || "direct") === "proxy") {
+      const execMode = (finalDraft.mode || "direct").toLowerCase();
+
+      if (execMode === "proxy") {
         const out = await runViaProxy({
           finalUrl,
           method,
@@ -367,6 +438,24 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         statusText = out.statusText;
         headers = out.headers;
         rawText = out.rawText;
+      } else if (execMode === "agent") {
+        const out = await runViaAgent({
+          finalUrl,
+          method,
+          headersObj: headerObj,
+          bodyText: hasBody ? bodyText : "",
+          signal,
+        });
+        status = out.status;
+        statusText = out.statusText;
+        headers = out.headers;
+        rawText = out.rawText;
+        isBase64 = !!out.isBase64;
+        contentType = out.contentType || "";
+        sizeBytes = out.sizeBytes || 0;
+        redirectChain = out.redirectChain || [];
+        finalResolvedUrl = out.finalUrl || finalUrl;
+        proxySource = out.proxySource || "agent";
       } else {
         const options = { method, headers: { ...headerObj }, signal };
         if (hasBody && bodyText.trim().length > 0) options.body = bodyText;
@@ -379,7 +468,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
       }
 
       const timeMs = Math.round(performance.now() - start);
-      const json = safeJsonParse(rawText);
+      const json = isBase64 ? null : safeJsonParse(rawText);
 
       // 3) Builder tests
       const tests = Array.isArray(req.tests) ? req.tests : [];
@@ -443,7 +532,12 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         iteration: item.idx === null ? null : item.idx + 1,
         iterationTotal: item.total || 0,
         rowVars: item.rowVars || {},
-        finalUrl,
+        finalUrl: finalResolvedUrl,
+        redirectChain,
+        isBase64,
+        contentType,
+        sizeBytes,
+        proxySource: execMode === "agent" ? proxySource || "agent" : execMode,
       };
 
       results.push(itemResult);
@@ -455,6 +549,8 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           traceId,
           source: "runner",
           name: displayName,
+          method: metaMethod,
+          finalUrl: metaFinalUrl,
           status,
           timeMs,
           headers,
@@ -495,6 +591,8 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           traceId,
           source: "runner",
           name: displayName,
+          method: metaMethod,
+          finalUrl: metaFinalUrl,
           message: errorMsg,
           rowVars: item.rowVars || {},
         },

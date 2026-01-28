@@ -40,6 +40,7 @@ function normalizeHeaders(headers) {
 
 function computeRawText(res) {
   if (!res) return "";
+  if (res.isBase64) return "";
   if (typeof res.rawText === "string") return res.rawText;
 
   if (typeof res.body === "string") return res.body;
@@ -113,6 +114,47 @@ function copyText(text) {
   }
 }
 
+function isImageContentType(ct) {
+  const t = String(ct || "").toLowerCase();
+  return t.startsWith("image/");
+}
+
+function base64ToBlob(base64, mime = "application/octet-stream") {
+  const b64 = String(base64 || "");
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function guessFilename({ filename, contentType } = {}) {
+  const fn = String(filename || "").trim();
+  if (fn) return fn;
+
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.startsWith("image/")) {
+    const ext = ct.split("/")[1] || "png";
+    return `response.${ext.replace(/[^a-z0-9]+/g, "") || "png"}`;
+  }
+  if (ct.includes("pdf")) return "response.pdf";
+  if (ct.includes("zip")) return "response.zip";
+  return "response.bin";
+}
+
+function triggerDownloadFromBase64({ base64, contentType, filename }) {
+  const blob = base64ToBlob(base64, contentType || "application/octet-stream");
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = guessFilename({ filename, contentType });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+
 function HighlightedPre({ text, matches, activeIndex, onActiveRef }) {
   const markRefs = useRef([]);
 
@@ -140,7 +182,46 @@ function HighlightedPre({ text, matches, activeIndex, onActiveRef }) {
   }
   if (cur < text.length) chunks.push({ t: text.slice(cur), m: false });
 
-  return (
+  
+
+  async function addAllCookiesToJar() {
+    if (!setCookiesArr.length) return;
+    if (!requestUrlForSave) {
+      setToast({ msg: "Cannot save cookies: missing request URL." });
+      return;
+    }
+    try {
+      for (const sc of setCookiesArr) {
+        await fetch(`${proxyBase}/cookiejar/set`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jarId: jarIdForSave, setCookie: String(sc), url: requestUrlForSave }),
+        });
+      }
+      setToast({ msg: `Saved ${setCookiesArr.length} cookie(s) to jar "${jarIdForSave}".` });
+    } catch (e) {
+      setToast({ msg: e?.message || "Failed to save cookies" });
+    }
+  }
+
+  async function addCookieToJar(sc) {
+    if (!sc) return;
+    if (!requestUrlForSave) {
+      setToast({ msg: "Cannot save cookie: missing request URL." });
+      return;
+    }
+    try {
+      await fetch(`${proxyBase}/cookiejar/set`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jarId: jarIdForSave, setCookie: String(sc), url: requestUrlForSave }),
+      });
+      setToast({ msg: `Saved cookie to jar "${jarIdForSave}".` });
+    } catch (e) {
+      setToast({ msg: e?.message || "Failed to save cookie" });
+    }
+  }
+return (
     <pre className="responseBody">
       {chunks.map((c, idx) => {
         if (!c.m) return <span key={idx}>{c.t}</span>;
@@ -268,6 +349,9 @@ function JsonTree({ value, onCopyPath }) {
 }
 
 export default function ResponseViewer({ response, onSaveExample, canSaveExample }) {
+  const [cookieSentFilter, setCookieSentFilter] = useState("");
+  const [cookieShowExcluded, setCookieShowExcluded] = useState(false);
+
   const [tab, setTab] = useState("body");
   const [bodyMode, setBodyMode] = useState("pretty"); // pretty | raw | preview
 
@@ -340,7 +424,83 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
 
   const headersArr = useMemo(() => normalizeHeaders(response?.headers), [response?.headers]);
 
+  const setCookiesArr = useMemo(() => {
+    const sc = response?.setCookie || response?.exchange?.response?.setCookie || [];
+    if (Array.isArray(sc)) return sc.filter(Boolean);
+    const h = response?.headers?.["set-cookie"] || response?.headers?.["set-cookie".toLowerCase()];
+    return h ? [String(h)] : [];
+  }, [response]);
+
+
+
+  const cookieSentCookies =
+    response?.cookieSentCookies ||
+    response?.exchange?.response?.cookieSentCookies ||
+    [];
+
+  const cookieExcludedCookies =
+    response?.cookieExcludedCookies ||
+    response?.exchange?.response?.cookieExcludedCookies ||
+    [];
+
+
+  const cookieSentHeader =
+    response?.cookieSentHeader ||
+    response?.exchange?.response?.cookieSentHeader ||
+    "";
+
+  const cookieSentFrom =
+    response?.cookieSentFrom ||
+    response?.exchange?.response?.cookieSentFrom ||
+    "";
+
+  const cookieSentCount =
+    response?.cookieSentCount ||
+    response?.exchange?.response?.cookieSentCount ||
+    (cookieSentHeader ? cookieSentHeader.split(";").filter(Boolean).length : 0);
+
+
+  const jarIdForSave =
+    response?.jarId ||
+    response?.cookieJar?.jarId ||
+    response?.exchange?.response?.jarId ||
+    response?.exchange?.response?.cookieJar?.jarId ||
+    response?.exchange?.request?.cookieJarId ||
+    "default";
+
+  const requestUrlForSave =
+    response?.exchange?.request?.finalUrl ||
+    response?.exchange?.request?.url ||
+    response?.request?.finalUrl ||
+    response?.request?.url ||
+    "";
+
+  const proxyBase = useMemo(() => {
+    const u = import.meta.env.VITE_PROXY_URL || "http://localhost:3001/proxy";
+    return String(u).replace(/\/proxy\/?$/i, "");
+  }, []);
+
+
   const rawText = useMemo(() => computeRawText(response), [response]);
+
+  const contentType = useMemo(() => {
+    if (!response) return "";
+    const direct = response.contentType || response.mimeType || response.mime;
+    if (direct) return String(direct);
+    const pair = headersArr.find(([k]) => String(k).toLowerCase() === "content-type");
+    return pair ? String(pair[1] || "") : "";
+  }, [response, headersArr]);
+
+  const isBinary = useMemo(() => {
+    if (!response) return false;
+    if (response.isBase64) return true;
+    if (typeof response.bodyBase64 === "string" && response.bodyBase64.length > 0) return true;
+    return false;
+  }, [response]);
+
+  const isImage = useMemo(() => {
+    return isBinary && isImageContentType(contentType);
+  }, [isBinary, contentType]);
 
   const jsonValue = useMemo(() => {
     if (!response) return null;
@@ -378,6 +538,16 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
   }, [query, bodyMode, tab]);
 
   const sizeBytes = useMemo(() => {
+    if (typeof response?.sizeBytes === "number" && response.sizeBytes > 0) return response.sizeBytes;
+
+    if (response?.isBase64 && typeof response?.bodyBase64 === "string") {
+      // base64 size ≈ 3/4 of length (minus padding). Good enough for UI.
+      const b64 = response.bodyBase64;
+      if (!b64) return 0;
+      const pad = (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
+      return Math.max(0, Math.floor((b64.length * 3) / 4) - pad);
+    }
+
     const t = rawText || "";
     if (!t) return 0;
     try {
@@ -385,7 +555,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
     } catch {
       return 0;
     }
-  }, [rawText]);
+  }, [response, rawText]);
 
   const sizeLabel = useMemo(() => {
     const n = sizeBytes;
@@ -395,12 +565,11 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   }, [sizeBytes]);
 
-  const contentTypePill =
-    jsonValue !== null && jsonValue !== undefined ? "JSON" : "Text";
+  const contentTypePill = isImage ? "Image" : isBinary ? "Binary" : (jsonValue !== null && jsonValue !== undefined ? "JSON" : "Text");
 
   const showBodySubTabs = tab === "body";
 
-  const showPreview = jsonValue !== null && jsonValue !== undefined;
+  const showPreview = (jsonValue !== null && jsonValue !== undefined) || isImage;
 
   const scrollToActive = (el) => {
     if (!el) return;
@@ -413,6 +582,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
 
   const openSearch = () => {
     if (tab !== "body") return;
+    if (isBinary) return;
     // If in Preview, switch to Pretty for text searching (Postman-ish)
     if (bodyMode === "preview") setBodyMode("pretty");
     setSearchOpen(true);
@@ -545,9 +715,26 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
               Save example
             </button>
           ) : null}
-          <button className="btn btnSm" type="button" onClick={openSearch} title="Find in body (Ctrl+F)">
-            Find
-          </button>
+{isBinary ? (
+  <button
+    className="btn btnSm"
+    type="button"
+    onClick={() =>
+      triggerDownloadFromBase64({
+        base64: response.bodyBase64,
+        contentType,
+        filename: response.filename,
+      })
+    }
+    title="Download response body"
+    disabled={!response?.bodyBase64}
+  >
+    Download
+  </button>
+) : null}
+<button className="btn btnSm" type="button" onClick={openSearch} title="Find in body (Ctrl+F)" disabled={isBinary}>
+  Find
+</button>
         </div>
       </div>
 
@@ -555,6 +742,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
       <div className="responseTabs">
         <TabBtn id="body" label="Body" />
         <TabBtn id="headers" label={`Headers (${headersArr.length})`} />
+        <TabBtn id="cookies" label={`Cookies${(setCookiesArr.length ? ` (${setCookiesArr.length})` : "")}`} hasDot={false} />
         <TabBtn
           id="tests"
           label={`Tests${builderTotal + scriptTotal ? ` (${builderPassed + scriptPassed}/${builderTotal + scriptTotal})` : ""}`}
@@ -618,7 +806,64 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
       <div className="responsePanel">
         {tab === "body" && (
           <>
-            {bodyMode === "preview" && showPreview ? (
+            {isBinary ? (
+              isImage && bodyMode === "preview" ? (
+                <div style={{ padding: 10 }}>
+                  <div className="smallMuted" style={{ marginBottom: 8 }}>
+                    Image preview
+                  </div>
+                  <img
+                    src={`data:${contentType || "image/*"};base64,${response.bodyBase64 || ""}`}
+                    alt={guessFilename({ filename: response.filename, contentType })}
+                    style={{ maxWidth: "100%", borderRadius: 12 }}
+                  />
+                </div>
+              ) : (
+                <div className="card" style={{ padding: 12 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Binary response</div>
+                  <div className="smallMuted">
+                    Content-Type: <span className="mono">{contentType || "application/octet-stream"}</span>
+                  </div>
+                  {response.filename ? (
+                    <div className="smallMuted">
+                      Filename: <span className="mono">{response.filename}</span>
+                    </div>
+                  ) : null}
+                  {sizeLabel ? (
+                    <div className="smallMuted">
+                      Size: <span className="mono">{sizeLabel}</span>
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      className="btn btnSm btnPrimary"
+                      type="button"
+                      onClick={() =>
+                        triggerDownloadFromBase64({
+                          base64: response.bodyBase64,
+                          contentType,
+                          filename: response.filename,
+                        })
+                      }
+                      disabled={!response?.bodyBase64}
+                    >
+                      Download
+                    </button>
+
+                    {isImage ? (
+                      <button className="btn btnSm" type="button" onClick={() => setBodyMode("preview")}>
+                        Preview image
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className="smallMuted" style={{ marginTop: 10 }}>
+                    Tip: Postman-style preview is supported for images. Other binary types are downloadable.
+                  </div>
+                </div>
+              )
+            ) : bodyMode === "preview" && showPreview ? (
               <JsonTree
                 value={jsonValue}
                 onCopyPath={async (path) => {
@@ -635,7 +880,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
               />
             )}
 
-            {!showPreview && bodyMode === "preview" ? (
+            {!showPreview && bodyMode === "preview" && !isBinary ? (
               <div className="smallMuted" style={{ marginTop: 8 }}>
                 Preview is available only for JSON responses.
               </div>
@@ -668,6 +913,215 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
               </table>
             )}
           </div>
+        )}
+
+        {tab === "cookies" && (
+        <div className="card" style={{ padding: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 600 }}>Cookies</div>
+              <div className="muted" style={{ marginTop: 4 }}>
+                Jar: <span style={{ fontFamily: "var(--mono)" }}>{jarIdForSave}</span>
+              </div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Cookies sent (request): <span style={{ fontFamily: "var(--mono)" }}>{cookieSentCount}</span>
+                {cookieSentFrom ? <span className="muted"> ({cookieSentFrom})</span> : null}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btnSm btnPrimary" onClick={addAllCookiesToJar} disabled={!setCookiesArr.length}>
+                Add all to jar
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            {cookieSentHeader ? (
+              <div className="card" style={{ padding: 10, marginBottom: 10 }}>
+                <div className="muted" style={{ marginBottom: 6 }}>Cookie header sent</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>{cookieSentHeader}</div>
+              </div>
+            ) : null}
+
+            {Array.isArray(cookieSentCookies) && cookieSentCookies.length ? (
+              <div className="card" style={{ padding: 10, marginBottom: 10 }}>
+                <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div className="muted">Matched cookies (sent)</div>
+                  <input
+                    className="input"
+                    style={{ maxWidth: 260 }}
+                    placeholder="Filter by name/domain"
+                    value={cookieSentFilter}
+                    onChange={(e) => setCookieSentFilter(e.target.value)}
+                  />
+                </div>
+                <div className="headersTable">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Value</th>
+                        <th>Domain</th>
+                        <th>Path</th>
+                        <th>Why</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cookieSentCookies
+                        .filter((c) => {
+                          const q = cookieSentFilter.trim().toLowerCase();
+                          if (!q) return true;
+                          return String(c.name || "").toLowerCase().includes(q) || String(c.domain || "").toLowerCase().includes(q);
+                        })
+                        .map((c, idx) => (
+                          <tr key={`${c.name || ""}-${idx}`}>
+                            <td>{c.name}</td>
+                            <td style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>{String(c.value ?? "")}</td>
+                            <td>{c.domain || ""}</td>
+                            <td>{c.path || "/"}</td>
+                            <td className="muted">{Array.isArray(c.whyParts) ? c.whyParts.join(" • ") : (c.why || "")}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            
+            <div className="card" style={{ padding: 10, marginBottom: 10 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div className="muted">Cookies debug</div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <label className="muted" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input type="checkbox" checked={cookieShowExcluded} onChange={(e) => setCookieShowExcluded(e.target.checked)} />
+                    Show excluded
+                  </label>
+                  <input
+                    className="input"
+                    style={{ maxWidth: 260 }}
+                    placeholder="Filter name/domain/reason"
+                    value={cookieSentFilter}
+                    onChange={(e) => setCookieSentFilter(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {Array.isArray(cookieSentCookies) && cookieSentCookies.length ? (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Matched cookies (sent)</div>
+                  <div className="headersTable">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Value</th>
+                          <th>Domain</th>
+                          <th>Path</th>
+                          <th>Why</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cookieSentCookies
+                          .filter((c) => {
+                            const q = cookieSentFilter.trim().toLowerCase();
+                            if (!q) return true;
+                            return (
+                              String(c.name || "").toLowerCase().includes(q) ||
+                              String(c.domain || "").toLowerCase().includes(q) ||
+                              String(c.why || "").toLowerCase().includes(q)
+                            );
+                          })
+                          .map((c, idx) => (
+                            <tr key={`sent-${c.name || ""}-${idx}`}>
+                              <td>{c.name}</td>
+                              <td style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>{String(c.value ?? "")}</td>
+                              <td>{c.domain}</td>
+                              <td>{c.path}</td>
+                              <td className="muted">{Array.isArray(c.whyParts) ? c.whyParts.join(" • ") : (c.why || "")}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                <div className="muted">No cookies were sent (or manual Cookie header used).</div>
+              )}
+
+              {cookieShowExcluded ? (
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Excluded cookies (not sent)</div>
+                  {Array.isArray(cookieExcludedCookies) && cookieExcludedCookies.length ? (
+                    <div className="headersTable">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Domain</th>
+                            <th>Path</th>
+                            <th>Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cookieExcludedCookies
+                            .filter((c) => {
+                              const q = cookieSentFilter.trim().toLowerCase();
+                              if (!q) return true;
+                              return (
+                                String(c.name || "").toLowerCase().includes(q) ||
+                                String(c.domain || "").toLowerCase().includes(q) ||
+                                String(c.reason || "").toLowerCase().includes(q)
+                              );
+                            })
+                            .map((c, idx) => (
+                              <tr key={`ex-${c.name || ""}-${idx}`}>
+                                <td>{c.name}</td>
+                                <td>{c.domain}</td>
+                                <td>{c.path}</td>
+                                <td className="muted">{Array.isArray(c.reasons) ? c.reasons.join(" • ") : (c.reason || "")}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="muted">No excluded cookies.</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Set-Cookie (received)</div>
+
+            {setCookiesArr.length ? (
+              <div className="headersTable">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: "70%" }}>Set-Cookie</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {setCookiesArr.map((sc, i) => (
+                      <tr key={i}>
+                        <td style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>
+                          {String(sc)}
+                        </td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          <button className="btn btnSm" onClick={() => addCookieToJar(sc)}>Add</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="muted">No Set-Cookie headers in this response.</div>
+            )}
+          </div>
+        </div>
         )}
 
         {tab === "tests" && (
