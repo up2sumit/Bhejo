@@ -1069,36 +1069,102 @@ const validateForCopy = () => {
     };
   };
 
-  const pairAgent = async () => {
-    const code = String(agentPairCode || "").trim();
-    if (!code) {
-      setAgentMsg("Enter the pair code shown in agent terminal.");
-      return;
-    }
-    const base = (agentBaseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
-    setAgentBusy(true);
-    setAgentMsg("Pairing...");
-    try {
-      const res = await fetch(`${base}/pair`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairCode: code }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok || !data?.token) {
-        const msg = data?.error?.message || data?.message || "Pairing failed";
-        throw new Error(msg);
+  const normalizeBase = (u) => String(u || "").trim().replace(/\/$/, "");
+
+const withTimeout = async (fn, ms = 700) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fn(ctrl.signal);
+  } finally {
+    clearTimeout(t);
+  }
+};
+
+const checkAgentHealth = async (base) => {
+  const b = normalizeBase(base || agentBaseUrl || AGENT_DEFAULT_BASE_URL);
+  return await withTimeout(async (signal) => {
+    const r = await fetch(`${b}/health`, { method: "GET", signal });
+    if (!r.ok) throw new Error(`Agent health failed (HTTP ${r.status})`);
+    const j = await r.json().catch(() => ({}));
+    if (!j?.ok) throw new Error("Agent health response invalid");
+    return { base: b, health: j };
+  });
+};
+
+const detectAgent = async () => {
+  // Common ports + quick scan range (fast fail due to timeout)
+  const candidates = [
+    3131, 3128, 3138, 3002, 3003,
+    ...Array.from({ length: 60 }, (_, i) => 3100 + i),
+  ];
+
+  setAgentBusy(true);
+  setAgentMsg("Detecting agent...");
+  try {
+    for (const p of candidates) {
+      const base = `http://127.0.0.1:${p}`;
+      try {
+        const res = await checkAgentHealth(base);
+        setAgentBaseUrl(res.base);
+        setAgentMsg(`Agent found at ${res.base}`);
+        setTimeout(() => setAgentMsg(""), 2000);
+        return;
+      } catch {
+        // continue
       }
-      setAgentToken(data.token);
-      setAgentPairCode("");
-      setAgentMsg("Paired ✔");
-    } catch (e) {
-      setAgentMsg(e?.message || "Pairing failed");
-    } finally {
-      setAgentBusy(false);
-      setTimeout(() => setAgentMsg(""), 2000);
     }
-  };
+    throw new Error("Agent not found on localhost. Start agent or enter base URL manually.");
+  } catch (e) {
+    setAgentMsg(e?.message || "Detect failed");
+    setTimeout(() => setAgentMsg(""), 2500);
+  } finally {
+    setAgentBusy(false);
+  }
+};
+
+const pairAgent = async () => {
+  const code = String(agentPairCode || "").trim();
+  if (!code) {
+    setAgentMsg("Enter the pair code shown in agent terminal.");
+    return;
+  }
+
+  const base = normalizeBase(agentBaseUrl || AGENT_DEFAULT_BASE_URL);
+
+  setAgentBusy(true);
+  setAgentMsg("Checking agent...");
+  try {
+    await checkAgentHealth(base);
+
+    setAgentMsg("Pairing...");
+    const res = await fetch(`${base}/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pairCode: code }),
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok || !data?.token) {
+      const msg = data?.error || data?.message || `Pairing failed (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
+
+    setAgentToken(data.token);
+    setAgentPairCode("");
+    setAgentMsg("Paired ✔");
+  } catch (e) {
+    const raw = e?.message || "Pairing failed";
+    const msg =
+      raw.includes("Failed to fetch") || raw.includes("aborted")
+        ? "Cannot reach agent. Check Agent base URL (port/IP) and CORS."
+        : raw;
+    setAgentMsg(msg);
+  } finally {
+    setAgentBusy(false);
+    setTimeout(() => setAgentMsg(""), 2000);
+  }
+};
 
   const sendRequest = async () => {
     if (!validate()) return;
@@ -2525,6 +2591,32 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
                 onChange={(e) => setAgentBaseUrl(e.target.value)}
                 placeholder={AGENT_DEFAULT_BASE_URL}
               />
+
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <button className="btn btnSm" type="button" onClick={detectAgent} disabled={agentBusy}>
+                  Auto Detect
+                </button>
+                <button
+                  className="btn btnSm"
+                  type="button"
+                  onClick={async () => {
+                    setAgentBusy(true);
+                    setAgentMsg("Checking...");
+                    try {
+                      const res = await checkAgentHealth(agentBaseUrl || AGENT_DEFAULT_BASE_URL);
+                      setAgentMsg(`OK: ${res.base} (port ${res.health?.port ?? "?"})`);
+                    } catch (e) {
+                      setAgentMsg(e?.message || "Health check failed");
+                    } finally {
+                      setAgentBusy(false);
+                      setTimeout(() => setAgentMsg(""), 2200);
+                    }
+                  }}
+                  disabled={agentBusy}
+                >
+                  Check
+                </button>
+              </div>
             </div>
 
             <div style={{ minWidth: 200 }}>
