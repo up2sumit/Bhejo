@@ -106,7 +106,7 @@ function applyEnvDeltaInPlace(targetObj, envDelta) {
   }
 }
 
-async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
+async function runViaProxy({ finalUrl, method, headersObj, bodyText, followRedirects, maxRedirects, signal }) {
   const proxyRes = await fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -130,7 +130,7 @@ async function runViaProxy({ finalUrl, method, headersObj, bodyText, signal }) {
   };
 }
 
-async function runViaAgent({ finalUrl, method, headersObj, bodyText, signal }) {
+async function runViaAgent({ finalUrl, method, headersObj, bodyText, followRedirects, maxRedirects, signal }) {
   const { baseUrl, token } = getAgentConfig();
   if (!token) throw new Error("Agent token missing. Pair the agent from UI first.");
 
@@ -139,6 +139,8 @@ async function runViaAgent({ finalUrl, method, headersObj, bodyText, signal }) {
     method,
     url: finalUrl,
     headers: headersArr,
+    followRedirects: !!followRedirects,
+    maxRedirects: Number(maxRedirects) || 0,
     body: !["GET", "HEAD"].includes(method)
       ? {
           mode: "raw",
@@ -426,12 +428,17 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
 
       const execMode = (finalDraft.mode || "direct").toLowerCase();
 
+      const followRedirects = finalDraft.followRedirects !== undefined ? !!finalDraft.followRedirects : true;
+      const maxRedirects = Math.max(0, Number(finalDraft.maxRedirects ?? 10) || 0);
+
       if (execMode === "proxy") {
         const out = await runViaProxy({
           finalUrl,
           method,
           headersObj: headerObj,
           bodyText: hasBody ? bodyText : "",
+          followRedirects,
+          maxRedirects,
           signal,
         });
         status = out.status;
@@ -444,6 +451,8 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
           method,
           headersObj: headerObj,
           bodyText: hasBody ? bodyText : "",
+          followRedirects,
+          maxRedirects,
           signal,
         });
         status = out.status;
@@ -457,7 +466,7 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
         finalResolvedUrl = out.finalUrl || finalUrl;
         proxySource = out.proxySource || "agent";
       } else {
-        const options = { method, headers: { ...headerObj }, signal };
+        const options = { method, headers: { ...headerObj }, signal, redirect: followRedirects ? "follow" : "manual" };
         if (hasBody && bodyText.trim().length > 0) options.body = bodyText;
 
         const res = await fetch(finalUrl, options);

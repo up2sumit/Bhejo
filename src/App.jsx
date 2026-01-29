@@ -5,7 +5,6 @@ import ResponseViewer from "./components/ResponseViewer";
 import HistoryPanel from "./components/HistoryPanel";
 import SavedPanel from "./components/SavedPanel";
 import EnvPanel from "./components/EnvPanel";
-import CookiesPanel from "./components/CookiesPanel";
 import RunnerPanel from "./components/RunnerPanel";
 import ToolsPanel from "./components/ToolsPanel";
 import CollectionsPanel from "./components/CollectionsPanel";
@@ -158,7 +157,7 @@ export default function App() {
   // Phase 3 tree collections count (badge)
   const [treeCollectionsCount, setTreeCollectionsCount] = useState(0);
 
-  const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | cookies | collections | runner | tools
+  const [sidebarTab, setSidebarTab] = useState("history"); // history | saved | env | collections | runner | tools
   const prevSidebarTabRef = useRef("collections");
   const effectiveSidebarTab = sidebarTab === "runner" ? prevSidebarTabRef.current : sidebarTab;
 
@@ -546,30 +545,54 @@ export default function App() {
   };
 
   const openFromPayload = (payload, { dirty = false } = {}) => {
+    // If this draft comes from the Collections tree, reuse the SAME tab (Postman-like)
+    const originNodeId =
+      payload?.__origin?.kind === "tree" ? payload.__origin.nodeId : null;
+
+    const stableId = originNodeId || payload?.id || uuid("req");
+
     const draft = {
-      id: payload.id || uuid("req"),
-      name: payload.name || "",
-      method: payload.method || "GET",
-      url: payload.url || "",
-      params: payload.params || [{ key: "", value: "" }],
-      headers: payload.headers || [{ key: "", value: "" }],
-      body: payload.body || "",
-      auth: payload.auth || { type: "none" },
-      tests: payload.tests || [],
-      testScript: payload.testScript || "",
-      dataRows: payload.dataRows || [],
-      mode: payload.mode || "direct",
-      preRequestScript: payload.preRequestScript || "",
-      // Phase 6
-      docText: payload.docText || "",
-      examples: Array.isArray(payload.examples) ? payload.examples : [],
-      defaultExampleId: payload.defaultExampleId || null,
-      origin: payload.__origin || null,
-      savedAt: new Date().toISOString(),
+      id: stableId,
+      name: payload?.name || "",
+      method: (payload?.method || "GET").toUpperCase(),
+      url: payload?.url || "",
+      params: payload?.params || [],
+      headers: payload?.headers || [],
+      auth: payload?.auth || { type: "none" },
+      body: payload?.body || { mode: "none", raw: "" },
+      tests: payload?.tests || "",
+      dataRows: payload?.dataRows || [],
+      followRedirects:
+        typeof payload?.followRedirects === "boolean" ? payload.followRedirects : true,
+      maxRedirects:
+        typeof payload?.maxRedirects === "number" ? payload.maxRedirects : 10,
+      // IMPORTANT: keep origin/path so save can write back into the tree
+      __origin: payload?.__origin || null,
+      __path: payload?.__path || null,
     };
 
-    newTab(draft, { activate: true, dirty });
+    const existing = reqTabs.find((t) => t.id === stableId);
+    if (existing) {
+      setActiveReqTabId(stableId);
+      // If tab isn't dirty, refresh it from source (e.g., after import/rename)
+      if (!existing.dirty) {
+        setReqDrafts((prev) => ({ ...prev, [stableId]: draft }));
+      }
+      return;
+    }
+
+    setReqTabs((prev) => [
+      ...prev,
+      {
+        id: stableId,
+        title: draft.name?.trim() || `${draft.method} request`,
+        dirty,
+      },
+    ]);
+    setReqDrafts((prev) => ({ ...prev, [stableId]: draft }));
+    setActiveReqTabId(stableId);
   };
+
 
   // -----------------------
   // History handlers
@@ -601,18 +624,55 @@ export default function App() {
   // Legacy Saved handlers (kept for now)
   // -----------------------
   const handleSaveRequest = (draft) => {
-    const updated = upsertSavedByName(draft);
-    setSaved(updated);
+    // If this draft came from Collections tree -> save back into the SAME node
+    const origin = draft?.__origin;
+    if (origin?.kind === "tree" && origin?.nodeId) {
+      setCollections((prev) => updateRequestNodeRequest(prev, origin.nodeId, draft));
+      // Mark tab as clean + keep title in sync
+      setReqTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeReqTabId
+            ? {
+                ...t,
+                title: String(draft?.name || "").trim() || `${String(draft?.method || "GET").toUpperCase()} request`,
+                dirty: false,
+              }
+            : t
+        )
+      );
+      return;
+    }
+
+    // Otherwise save into "Saved" list (standalone request)
+    const next = {
+      id: draft.id || uuid("saved"),
+      name: draft.name || "",
+      method: draft.method || "GET",
+      url: draft.url || "",
+      params: draft.params || [],
+      headers: draft.headers || [],
+      auth: draft.auth || { type: "none" },
+      body: draft.body || { mode: "none", raw: "" },
+      tests: draft.tests || "",
+      dataRows: draft.dataRows || [],
+      followRedirects:
+        typeof draft.followRedirects === "boolean" ? draft.followRedirects : true,
+      maxRedirects: typeof draft.maxRedirects === "number" ? draft.maxRedirects : 10,
+    };
+
+    setSavedRequests((prev) => {
+      const idx = prev.findIndex((r) => r.id === next.id);
+      if (idx >= 0) {
+        const copy = prev.slice();
+        copy[idx] = next;
+        return copy;
+      }
+      return [next, ...prev];
+    });
+    setSavedSearch("");
     setSidebarTab("saved");
-    // mark current tab clean
-    setReqTabs((tabs) =>
-      (tabs || []).map((t) =>
-        t.id === activeReqTabId
-          ? { ...t, dirty: false, draft: { ...t.draft, savedAt: new Date().toISOString() } }
-          : t
-      )
-    );
   };
+
 
   const handleLoadSaved = (item) => {
     openFromPayload({
@@ -729,15 +789,6 @@ useEffect(() => {
             aria-selected={sidebarTab === "env"}
           >
             Env
-          </button>
-
-          <button
-            className={`topNavBtn ${sidebarTab === "cookies" ? "active" : ""}`}
-            onClick={() => goToTab("cookies")}
-            role="tab"
-            aria-selected={sidebarTab === "cookies"}
-          >
-            Cookies
           </button>
           <button
             className={`topNavBtn ${sidebarTab === "collections" ? "active" : ""}`}

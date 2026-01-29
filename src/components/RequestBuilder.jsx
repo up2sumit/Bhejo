@@ -551,6 +551,26 @@ export default function RequestBuilder({
   const [agentMsg, setAgentMsg] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
 
+  // Redirect controls (Postman-like)
+  const [followRedirects, setFollowRedirects] = useState(() => {
+    try {
+      const v = localStorage.getItem("bhejo_followRedirects");
+      return v === null ? true : v === "true";
+    } catch {
+      return true;
+    }
+  });
+
+  const [maxRedirects, setMaxRedirects] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem("bhejo_maxRedirects") || 10);
+      return Number.isFinite(v) ? v : 10;
+    } catch {
+      return 10;
+    }
+  });
+
+
   useEffect(() => {
     saveLS("bhejo_agent_baseUrl", agentBaseUrl || "");
   }, [agentBaseUrl]);
@@ -717,6 +737,8 @@ export default function RequestBuilder({
         docText,
         examples,
         defaultExampleId,
+        followRedirects,
+        maxRedirects,
         savedAt: initial?.savedAt || new Date().toISOString(),
       },
       { reason: "edit" }
@@ -741,6 +763,8 @@ export default function RequestBuilder({
     docText,
     examples,
     defaultExampleId,
+    followRedirects,
+    maxRedirects,
   ]);
 
   const { finalDraft, varMeta } = useMemo(() => {
@@ -1113,6 +1137,12 @@ const validateForCopy = () => {
 
       const finalUrl = buildFinalUrl(draftResolved.url, draftResolved.params);
 
+      // Redirect controls
+      const followRedirectsResolved = (
+        draftResolved.followRedirects !== undefined ? !!draftResolved.followRedirects : !!followRedirects
+      );
+      const maxRedirectsResolved = Math.max(0, Number(draftResolved.maxRedirects ?? maxRedirects) || 0);
+
       metaMethod = draftResolved.method;
       metaFinalUrl = finalUrl;
 
@@ -1164,6 +1194,7 @@ const validateForCopy = () => {
           method: draftResolved.method,
           headers: { ...headerObj },
           signal: controller.signal,
+          redirect: followRedirectsResolved ? "follow" : "manual",
         };
 
         if (!["GET", "HEAD"].includes(draftResolved.method)) {
@@ -1265,6 +1296,8 @@ const validateForCopy = () => {
             url: finalUrl,
             headers: Object.entries(headerObj || {}).map(([key, value]) => ({ key, value })),
             body: bodyPayload,
+            followRedirects: followRedirectsResolved,
+            maxRedirects: maxRedirectsResolved,
           }),
         });
 
@@ -1340,6 +1373,8 @@ const validateForCopy = () => {
           body: JSON.stringify({
             url: finalUrl,
             method: draftResolved.method,
+            followRedirects: followRedirectsResolved,
+            maxRedirects: maxRedirectsResolved,
             headers: proxyHeaders,
             body: proxyBodyText,
             isMultipart,
@@ -1532,6 +1567,8 @@ const validateForCopy = () => {
         docText,
         examples,
         defaultExampleId,
+        followRedirects,
+        maxRedirects,
         savedAt: new Date().toISOString(),
         lastResult: {
           status: resStatus,
@@ -1584,6 +1621,8 @@ const validateForCopy = () => {
         docText,
         examples,
         defaultExampleId,
+        followRedirects,
+        maxRedirects,
         savedAt: new Date().toISOString(),
         lastResult: {
           status: "ERR",
@@ -1628,6 +1667,8 @@ const validateForCopy = () => {
       docText,
       examples,
       defaultExampleId,
+        followRedirects,
+        maxRedirects,
     });
   };
 
@@ -2436,6 +2477,26 @@ fetch("https://api.example.com/todos", { method: "GET", headers: { Accept: "appl
           >
             Agent
           </button>
+        </div>
+      </div>
+
+      <div className="row" style={{ gap: 12, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <label className="smallMuted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={followRedirects} onChange={(e) => setFollowRedirects(e.target.checked)} />
+          <span>Follow redirects</span>
+        </label>
+
+        <div className="smallMuted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>Max</span>
+          <input
+            className="input"
+            style={{ width: 90 }}
+            type="number"
+            min="0"
+            value={maxRedirects}
+            onChange={(e) => setMaxRedirects(Number(e.target.value) || 0)}
+            disabled={!followRedirects}
+          />
         </div>
       </div>
 

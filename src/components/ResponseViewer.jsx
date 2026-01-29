@@ -350,7 +350,6 @@ function JsonTree({ value, onCopyPath }) {
 
 export default function ResponseViewer({ response, onSaveExample, canSaveExample }) {
   const [cookieSentFilter, setCookieSentFilter] = useState("");
-  const [cookieShowExcluded, setCookieShowExcluded] = useState(false);
 
   const [tab, setTab] = useState("body");
   const [bodyMode, setBodyMode] = useState("pretty"); // pretty | raw | preview
@@ -438,11 +437,6 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
     response?.exchange?.response?.cookieSentCookies ||
     [];
 
-  const cookieExcludedCookies =
-    response?.cookieExcludedCookies ||
-    response?.exchange?.response?.cookieExcludedCookies ||
-    [];
-
 
   const cookieSentHeader =
     response?.cookieSentHeader ||
@@ -458,6 +452,21 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
     response?.cookieSentCount ||
     response?.exchange?.response?.cookieSentCount ||
     (cookieSentHeader ? cookieSentHeader.split(";").filter(Boolean).length : 0);
+
+  const redirectChain = useMemo(() => {
+    const rc = response?.redirectChain || response?.exchange?.response?.redirectChain || [];
+    return Array.isArray(rc) ? rc : [];
+  }, [response]);
+
+  const finalUrl = useMemo(() => {
+    return (
+      response?.finalUrl ||
+      response?.exchange?.response?.finalUrl ||
+      response?.exchange?.request?.finalUrl ||
+      response?.exchange?.request?.url ||
+      ""
+    );
+  }, [response]);
 
 
   const jarIdForSave =
@@ -742,6 +751,9 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
       <div className="responseTabs">
         <TabBtn id="body" label="Body" />
         <TabBtn id="headers" label={`Headers (${headersArr.length})`} />
+        {redirectChain.length ? (
+          <TabBtn id="redirects" label={`Redirects (${redirectChain.length})`} />
+        ) : null}
         <TabBtn id="cookies" label={`Cookies${(setCookiesArr.length ? ` (${setCookiesArr.length})` : "")}`} hasDot={false} />
         <TabBtn
           id="tests"
@@ -888,6 +900,43 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
           </>
         )}
 
+        {tab === "redirects" && redirectChain.length ? (
+          <div style={{ padding: 12 }}>
+            <div className="smallMuted" style={{ marginBottom: 8 }}>
+              Redirect chain ({redirectChain.length})
+            </div>
+            <div className="card" style={{ padding: 10 }}>
+              {redirectChain.map((hop, i) => {
+                const from = hop?.url || hop?.from || hop?.requestUrl || "";
+                const to = hop?.location || hop?.to || hop?.targetUrl || "";
+                const status = hop?.status || hop?.statusCode || "";
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "8px 0",
+                      borderBottom: i < redirectChain.length - 1 ? "1px solid var(--border)" : "none",
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: "space-between", gap: 10 }}>
+                      <div className="mono" style={{ minWidth: 64 }}>{status}</div>
+                      <div className="mono" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{from}</div>
+                    </div>
+                    {to ? (
+                      <div className="smallMuted mono" style={{ marginTop: 4 }}>→ {to}</div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+            {finalUrl ? (
+              <div className="smallMuted" style={{ marginTop: 8 }}>
+                Final URL: <span className="mono">{finalUrl}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {tab === "headers" && (
           <div className="headersTable">
             {headersArr.length === 0 ? (
@@ -979,7 +1028,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
                             <td style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>{String(c.value ?? "")}</td>
                             <td>{c.domain || ""}</td>
                             <td>{c.path || "/"}</td>
-                            <td className="muted">{Array.isArray(c.whyParts) ? c.whyParts.join(" • ") : (c.why || "")}</td>
+                            <td className="muted">{c.why || ""}</td>
                           </tr>
                         ))}
                     </tbody>
@@ -988,112 +1037,7 @@ export default function ResponseViewer({ response, onSaveExample, canSaveExample
               </div>
             ) : null}
 
-            
-            <div className="card" style={{ padding: 10, marginBottom: 10 }}>
-              <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div className="muted">Cookies debug</div>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <label className="muted" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input type="checkbox" checked={cookieShowExcluded} onChange={(e) => setCookieShowExcluded(e.target.checked)} />
-                    Show excluded
-                  </label>
-                  <input
-                    className="input"
-                    style={{ maxWidth: 260 }}
-                    placeholder="Filter name/domain/reason"
-                    value={cookieSentFilter}
-                    onChange={(e) => setCookieSentFilter(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {Array.isArray(cookieSentCookies) && cookieSentCookies.length ? (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Matched cookies (sent)</div>
-                  <div className="headersTable">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>Value</th>
-                          <th>Domain</th>
-                          <th>Path</th>
-                          <th>Why</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cookieSentCookies
-                          .filter((c) => {
-                            const q = cookieSentFilter.trim().toLowerCase();
-                            if (!q) return true;
-                            return (
-                              String(c.name || "").toLowerCase().includes(q) ||
-                              String(c.domain || "").toLowerCase().includes(q) ||
-                              String(c.why || "").toLowerCase().includes(q)
-                            );
-                          })
-                          .map((c, idx) => (
-                            <tr key={`sent-${c.name || ""}-${idx}`}>
-                              <td>{c.name}</td>
-                              <td style={{ fontFamily: "var(--mono)", fontSize: 12, whiteSpace: "pre-wrap" }}>{String(c.value ?? "")}</td>
-                              <td>{c.domain}</td>
-                              <td>{c.path}</td>
-                              <td className="muted">{Array.isArray(c.whyParts) ? c.whyParts.join(" • ") : (c.why || "")}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ) : (
-                <div className="muted">No cookies were sent (or manual Cookie header used).</div>
-              )}
-
-              {cookieShowExcluded ? (
-                <div>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>Excluded cookies (not sent)</div>
-                  {Array.isArray(cookieExcludedCookies) && cookieExcludedCookies.length ? (
-                    <div className="headersTable">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>Domain</th>
-                            <th>Path</th>
-                            <th>Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {cookieExcludedCookies
-                            .filter((c) => {
-                              const q = cookieSentFilter.trim().toLowerCase();
-                              if (!q) return true;
-                              return (
-                                String(c.name || "").toLowerCase().includes(q) ||
-                                String(c.domain || "").toLowerCase().includes(q) ||
-                                String(c.reason || "").toLowerCase().includes(q)
-                              );
-                            })
-                            .map((c, idx) => (
-                              <tr key={`ex-${c.name || ""}-${idx}`}>
-                                <td>{c.name}</td>
-                                <td>{c.domain}</td>
-                                <td>{c.path}</td>
-                                <td className="muted">{Array.isArray(c.reasons) ? c.reasons.join(" • ") : (c.reason || "")}</td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="muted">No excluded cookies.</div>
-                  )}
-                </div>
-              ) : null}
-            </div>
-
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Set-Cookie (received)</div>
-
             {setCookiesArr.length ? (
               <div className="headersTable">
                 <table>
