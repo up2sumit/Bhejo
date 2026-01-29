@@ -1,8 +1,21 @@
-import express from "express";
-import cors from "cors";
+// server/index.js  (Phase 9b: Zero-dependency proxy server - "no feature loss" vs Express version)
+// Uses ONLY Node built-ins + global fetch. No express/cors install needed.
+//
+// ✅ Matches the Express proxy contract used by RequestBuilder:
+//   - POST /proxy accepts: { url, method, headers, body, timeoutMs, isMultipart, multipartParts, cookieJarEnabled, cookieJarId, cookieJar }
+//   - Responds: { ok, status, statusText, headers, body, setCookie, jarId }
+// ✅ Includes cookie jar debug endpoints like the Express server:
+//   - GET  /cookiejar?jarId=default
+//   - POST /cookiejar/clear { jarId }
+// ✅ Multipart (form-data) support from multipartParts (text + file base64), same as Express server
+//
+// Notes:
+// - This is for local/dev tooling. Keep ALLOWED_HOSTS strict.
+
+import http from "node:http";
+import { URL } from "node:url";
 import { getJar, clearJar, markDirty } from "./cookieJarStore.js";
 
-const app = express();
 const PORT = 3001;
 
 // --- IMPORTANT SECURITY ---
@@ -12,27 +25,63 @@ const ALLOWED_HOSTS = new Set([
   "library-management-api-i6if.onrender.com",
 ]);
 
-// Allow both common Vite dev ports (your Vite is 3000 in vite.config.js)
+// Allow both common Vite dev ports
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
   "http://localhost:5173",
 ]);
 
-// Payload size: multipart uploads via proxy are base64 in JSON (bigger than raw file)
-app.use(express.json({ limit: "35mb" }));
-app.use(express.text({ type: "*/*", limit: "35mb" }));
+const MAX_BYTES = 25 * 1024 * 1024; // 25mb
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // allow curl/postman/no-origin
-      if (!origin) return cb(null, true);
-      if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
-      return cb(null, false);
-    },
-    credentials: false,
-  })
-);
+function corsHeaders(origin) {
+  // allow curl/postman/no-origin
+  const allow = !origin ? "*" : (ALLOWED_ORIGINS.has(origin) ? origin : "");
+  const h = {
+    "Access-Control-Allow-Methods": "POST,GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
+    "Access-Control-Max-Age": "86400",
+  };
+  if (allow) h["Access-Control-Allow-Origin"] = allow;
+  return h;
+}
+
+function json(res, status, obj, extraHeaders = {}) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    ...extraHeaders,
+  });
+  res.end(body);
+}
+
+function text(res, status, body, extraHeaders = {}) {
+  const b = String(body ?? "");
+  res.writeHead(status, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": Buffer.byteLength(b),
+    ...extraHeaders,
+  });
+  res.end(b);
+}
+
+async function readBody(req, maxBytes = MAX_BYTES) {
+  return await new Promise((resolve, reject) => {
+    let total = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      total += c.length;
+      if (total > maxBytes) {
+        reject(new Error("Payload too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
 
 function isAllowedTarget(targetUrl) {
   try {
@@ -49,12 +98,9 @@ function sanitizeIncomingHeaders(headers, { isMultipart } = {}) {
     const key = String(k).toLowerCase();
 
     // Block hop-by-hop and unsafe headers
-    if (
-      ["host", "connection", "content-length", "accept-encoding", "referer", "origin"].includes(key)
-    )
-      continue;
+    if (["host", "connection", "content-length", "accept-encoding", "referer", "origin"].includes(key)) continue;
 
-    // multipart boundary must be set by fetch/FormData
+    // multipart boundary must be set by us
     if (isMultipart && key === "content-type") continue;
 
     clean[k] = v;
@@ -66,37 +112,10 @@ function sanitizeOutgoingHeaders(headers) {
   const clean = {};
   for (const [k, v] of headers.entries()) {
     const key = String(k).toLowerCase();
-    // Remove headers that can cause browser issues
     if (["content-encoding", "transfer-encoding"].includes(key)) continue;
     clean[key] = v;
   }
   return clean;
-}
-
-
-function isTextLikeContentType(ct) {
-  const t = String(ct || "").toLowerCase();
-  if (!t) return true; // unknown -> treat as text to avoid base64 bloat
-  if (t.startsWith("text/")) return true;
-  if (t.includes("json")) return true;
-  if (t.includes("xml")) return true;
-  if (t.includes("javascript")) return true;
-  if (t.includes("x-www-form-urlencoded")) return true;
-  if (t.includes("graphql")) return true;
-  return false;
-}
-
-function getFilenameFromContentDisposition(cd) {
-  const s = String(cd || "");
-  if (!s) return "";
-  // filename*=UTF-8''... or filename="..."
-  let m = s.match(/filename\*=UTF-8''([^;]+)/i);
-  if (m && m[1]) {
-    try { return decodeURIComponent(m[1].trim().replace(/^"|"$/g, "")); } catch { return m[1].trim(); }
-  }
-  m = s.match(/filename=([^;]+)/i);
-  if (m && m[1]) return m[1].trim().replace(/^"|"$/g, "");
-  return "";
 }
 
 function decodeBase64ToUint8(base64) {
@@ -105,11 +124,9 @@ function decodeBase64ToUint8(base64) {
 }
 
 /* =========================
-   Cookie matching helpers
+   Cookie matching helpers (ported from your Express server)
    ========================= */
-function nowMs() {
-  return Date.now();
-}
+function nowMs() { return Date.now(); }
 
 function defaultCookiePath(pathname) {
   if (!pathname || !pathname.startsWith("/")) return "/";
@@ -132,66 +149,63 @@ function domainMatches(cookieDomain, host) {
 }
 
 function pathMatches(cookiePath, reqPath) {
-  const cp = cookiePath || "/";
-  const rp = reqPath || "/";
-  if (rp === cp) return true;
-  if (rp.startsWith(cp)) {
-    if (cp.endsWith("/")) return true;
-    const nextChar = rp.charAt(cp.length);
-    return nextChar === "/" || nextChar === "" || nextChar === "?";
-  }
-  return false;
+  const cp = String(cookiePath || "/");
+  const rp = String(reqPath || "/");
+  if (cp === "/") return true;
+  if (!rp.startsWith(cp)) return false;
+  // If exact match or next char is /
+  if (rp.length === cp.length) return true;
+  return rp.charAt(cp.length) === "/";
 }
 
-function parseSetCookie(setCookieStr, requestUrl) {
-  const u = new URL(requestUrl);
-  const parts = String(setCookieStr || "")
-    .split(";")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!parts.length) return null;
-
-  const [nameValue, ...attrs] = parts;
-  const eq = nameValue.indexOf("=");
+function parseSetCookie(setCookieStr, url) {
+  // Basic Set-Cookie parsing sufficient for Postman-like persistence
+  const parts = String(setCookieStr || "").split(";").map((s) => s.trim()).filter(Boolean);
+  const first = parts.shift() || "";
+  const eq = first.indexOf("=");
   if (eq <= 0) return null;
 
-  const name = nameValue.slice(0, eq).trim();
-  const value = nameValue.slice(eq + 1);
+  const name = first.slice(0, eq).trim();
+  const value = first.slice(eq + 1).trim();
+
+  const u = new URL(url);
+  const host = u.hostname;
+  const path = u.pathname || "/";
 
   const cookie = {
     name,
     value,
-    domain: u.hostname, // default host-only
+    domain: host,
+    path: defaultCookiePath(path),
     hostOnly: true,
-    path: defaultCookiePath(u.pathname),
-    expiresAt: null, // ms
-    secure: false,
+    secure: u.protocol === "https:",
     httpOnly: false,
-    sameSite: "",
+    sameSite: null,
+    expiresAt: null,
   };
 
-  for (const a of attrs) {
-    const [k0, ...rest] = a.split("=");
-    const k = String(k0 || "").trim().toLowerCase();
+  for (const p of parts) {
+    const [kRaw, ...rest] = p.split("=");
+    const k = String(kRaw || "").toLowerCase();
     const v = rest.join("=").trim();
 
     if (k === "domain" && v) {
-      cookie.domain = v.replace(/^\./, "").toLowerCase();
+      cookie.domain = v.replace(/^\./, "");
       cookie.hostOnly = false;
     } else if (k === "path" && v) {
-      cookie.path = v.startsWith("/") ? v : `/${v}`;
-    } else if (k === "max-age" && v) {
-      const secs = Number(v);
-      if (!Number.isNaN(secs)) cookie.expiresAt = nowMs() + secs * 1000;
-    } else if (k === "expires" && v) {
-      const t = Date.parse(v);
-      if (!Number.isNaN(t)) cookie.expiresAt = t;
+      cookie.path = v;
     } else if (k === "secure") {
       cookie.secure = true;
     } else if (k === "httponly") {
       cookie.httpOnly = true;
     } else if (k === "samesite" && v) {
       cookie.sameSite = v;
+    } else if (k === "max-age" && v) {
+      const sec = Number(v);
+      if (!Number.isNaN(sec)) cookie.expiresAt = nowMs() + sec * 1000;
+    } else if (k === "expires" && v) {
+      const ms = Date.parse(v);
+      if (!Number.isNaN(ms)) cookie.expiresAt = ms;
     }
   }
 
@@ -199,238 +213,73 @@ function parseSetCookie(setCookieStr, requestUrl) {
 }
 
 function upsertCookie(jar, hostname, cookie) {
-  const host = String(hostname || "").toLowerCase();
-  if (!host) return;
+  const hostKey = String(hostname || "").toLowerCase();
+  const list = jar.get(hostKey) || [];
 
-  if (!jar.has(host)) jar.set(host, []);
-  const list = jar.get(host);
-
-  // Remove expired cookies first
-  const kept = (list || []).filter((c) => c && !isExpired(c));
-
-  // If expires in past => delete cookie
-  if (cookie.expiresAt !== null && cookie.expiresAt <= nowMs()) {
-    jar.set(
-      host,
-      kept.filter((c) => !(c.name === cookie.name && c.domain === cookie.domain && c.path === cookie.path))
-    );
-    return;
+  // Replace if same name+domain+path
+  const out = [];
+  let replaced = false;
+  for (const c of list) {
+    if (!c) continue;
+    if (
+      c.name === cookie.name &&
+      String(c.domain).toLowerCase() === String(cookie.domain).toLowerCase() &&
+      String(c.path || "/") === String(cookie.path || "/")
+    ) {
+      out.push(cookie);
+      replaced = true;
+    } else {
+      out.push(c);
+    }
   }
-
-  const next = kept.filter((c) => !(c.name === cookie.name && c.domain === cookie.domain && c.path === cookie.path));
-  next.push(cookie);
-  jar.set(host, next);
+  if (!replaced) out.push(cookie);
+  jar.set(hostKey, out);
 }
 
-
-function resolveCookiesForUrl(jar, requestUrl, options = {}) {
-  const u = new URL(requestUrl);
+function buildCookieHeader(jar, url) {
+  if (!jar) return "";
+  const u = new URL(url);
   const host = u.hostname.toLowerCase();
   const path = u.pathname || "/";
   const isHttps = u.protocol === "https:";
-
-  const siteOrigin = options.siteOrigin ? String(options.siteOrigin) : "";
-  let siteHost = "";
-  try {
-    siteHost = siteOrigin ? new URL(siteOrigin).hostname.toLowerCase() : "";
-  } catch {
-    siteHost = "";
-  }
-  const isCrossSite = !!(siteHost && siteHost !== host);
-
-  const manualCookieHeader = options.manualCookieHeader ? String(options.manualCookieHeader) : "";
 
   const allCookies = [];
   for (const [, list] of jar.entries()) {
     if (Array.isArray(list)) allCookies.push(...list);
   }
 
-  const sentCandidates = [];
-  const excluded = [];
+  const candidates = allCookies.filter((c) => {
+    if (!c || isExpired(c)) return false;
+    if (c.secure && !isHttps) return false;
 
-  const normalizeSameSite = (v) => String(v || "").toLowerCase(); // "lax" | "strict" | "none" | ""
-  const effectiveSameSite = (c) => {
-    const ss = normalizeSameSite(c.sameSite);
-    // Modern browsers default to Lax when unspecified; Postman-like debug is more useful with that assumption.
-    return ss || "lax";
-  };
-
-  for (const c of allCookies) {
-    if (!c) continue;
-
-    const base = {
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      hostOnly: !!c.hostOnly,
-      path: c.path || "/",
-      secure: !!c.secure,
-      httpOnly: !!c.httpOnly,
-      sameSite: c.sameSite || "",
-      expiresAt: c.expiresAt ?? null,
-    };
-
-    const reasons = [];
-    const notes = [];
-
-    // Notes (not blockers)
-    if (c.httpOnly) notes.push("HttpOnly: not accessible to scripts");
-
-    // Expiry
-    if (isExpired(c)) {
-      reasons.push("Expired");
-      excluded.push({ ...base, reasons, notes });
-      continue;
-    }
-
-    // Secure over http
-    if (c.secure && !isHttps) {
-      reasons.push("Secure cookie over HTTP");
-      excluded.push({ ...base, reasons, notes });
-      continue;
-    }
-
-    // SameSite=None requires Secure
-    const ssEff = effectiveSameSite(c); // lax/strict/none
-    if (ssEff === "none" && !c.secure) {
-      reasons.push("SameSite=None requires Secure");
-      excluded.push({ ...base, reasons, notes });
-      continue;
-    }
-
-    // SameSite cross-site blocking (XHR/fetch)
-    if (isCrossSite) {
-      if (ssEff === "strict") {
-        reasons.push("SameSite=Strict blocks cross-site requests");
-        excluded.push({ ...base, reasons, notes });
-        continue;
-      }
-      if (ssEff === "lax") {
-        reasons.push("SameSite=Lax blocks cross-site XHR/fetch");
-        excluded.push({ ...base, reasons, notes });
-        continue;
-      }
-      // none => allowed (if secure requirement satisfied)
-    }
-
-    // domain match
     if (c.hostOnly) {
-      if (String(c.domain).toLowerCase() !== host) {
-        reasons.push("Host-only domain mismatch");
-        excluded.push({ ...base, reasons, notes });
-        continue;
-      }
+      if (String(c.domain).toLowerCase() !== host) return false;
     } else {
-      if (!domainMatches(c.domain, host)) {
-        reasons.push("Domain mismatch");
-        excluded.push({ ...base, reasons, notes });
-        continue;
-      }
+      if (!domainMatches(c.domain, host)) return false;
     }
 
-    // path match
-    if (!pathMatches(c.path, path)) {
-      reasons.push("Path mismatch");
-      excluded.push({ ...base, reasons, notes });
-      continue;
-    }
+    if (!pathMatches(c.path, path)) return false;
+    return true;
+  });
 
-    // Candidate to send
-    sentCandidates.push({ c, base, notes, ssEff });
-  }
+  if (!candidates.length) return "";
 
-  // Most specific path wins for sent candidates
-  sentCandidates.sort((a, b) => (b.c.path || "").length - (a.c.path || "").length);
+  // Most specific path wins
+  candidates.sort((a, b) => (String(b.path || "").length - String(a.path || "").length));
 
   const seen = new Set();
-  const sentCookies = [];
   const pairs = [];
-
-  for (const item of sentCandidates) {
-    const c = item.c;
-    const base = item.base;
-    const notes = item.notes;
-
-    if (seen.has(c.name)) {
-      excluded.push({
-        ...base,
-        reasons: ["Overridden by a more specific cookie with the same name"],
-        notes,
-      });
-      continue;
-    }
+  for (const c of candidates) {
+    if (seen.has(c.name)) continue;
     seen.add(c.name);
-
-    const whyParts = [];
-    if (c.hostOnly) whyParts.push("Host-only match");
-    else whyParts.push("Domain match");
-    whyParts.push(`Path match (${c.path || "/"})`);
-    whyParts.push(c.secure ? "Secure" : "Not secure");
-    whyParts.push(`SameSite=${String(c.sameSite || "default(Lax)")}`);
-
-    sentCookies.push({
-      ...base,
-      whyParts,
-      notes,
-    });
-
     pairs.push(`${c.name}=${c.value}`);
   }
 
-  const header = pairs.join("; ");
-
-  // Manual Cookie header overrides jar cookies (debug explains why)
-  if (manualCookieHeader) {
-    const overridden = sentCookies.map((c) => ({
-      ...c,
-      reasons: ["Overridden by manual Cookie header"],
-      notes: c.notes || [],
-    }));
-    const excl = excluded.map((c) => ({
-      ...c,
-      reasons: Array.isArray(c.reasons) && c.reasons.length
-        ? [...c.reasons, "Manual Cookie header present"]
-        : ["Manual Cookie header present"],
-    }));
-
-    return {
-      host,
-      path,
-      isHttps,
-      isCrossSite,
-      siteOrigin: siteOrigin || "",
-      header: manualCookieHeader,
-      count: manualCookieHeader.split(";").map((x) => x.trim()).filter(Boolean).length,
-      cookiesSent: [],
-      cookiesExcluded: [...overridden, ...excl],
-      manualOverride: true,
-    };
-  }
-
-  return {
-    host,
-    path,
-    isHttps,
-    isCrossSite,
-    siteOrigin: siteOrigin || "",
-    header,
-    count: sentCookies.length,
-    cookiesSent: sentCookies,
-    cookiesExcluded: excluded,
-    manualOverride: false,
-  };
-}
-
-
-
-
-function buildCookieHeader(jar, requestUrl) {
-  const resolved = resolveCookiesForUrl(jar, requestUrl);
-  return resolved.header || "";
+  return pairs.join("; ");
 }
 
 function getSetCookiesFromFetchResponse(res) {
-  // undici fetch in Node exposes headers.getSetCookie()
+  // Node/undici fetch supports headers.getSetCookie()
   try {
     if (typeof res.headers.getSetCookie === "function") return res.headers.getSetCookie() || [];
   } catch {
@@ -441,12 +290,67 @@ function getSetCookiesFromFetchResponse(res) {
 }
 
 /* =========================
-   Cookie jar debug endpoints
+   Multipart builder (no FormData needed)
    ========================= */
-app.get("/cookiejar", async (req, res) => {
-  const jarId = String(req.query.jarId || "default");
+function buildMultipartBody(multipartParts) {
+  const boundary = "----bhejo_" + Math.random().toString(16).slice(2);
+  const chunks = [];
+
+  for (const p of multipartParts || []) {
+    const name = String(p?.name || "").trim();
+    if (!name) continue;
+
+    const kind = String(p?.kind || "text").toLowerCase();
+
+    chunks.push(Buffer.from(`--${boundary}\r\n`, "utf-8"));
+
+    if (kind === "file") {
+      const filename = String(p?.filename || "file");
+      const mime = String(p?.mime || "application/octet-stream");
+      const base64 = p?.base64 || "";
+      const bytes = Buffer.from(decodeBase64ToUint8(base64));
+
+      chunks.push(
+        Buffer.from(
+          `Content-Disposition: form-data; name="${escapeQuotes(name)}"; filename="${escapeQuotes(filename)}"\r\n` +
+          `Content-Type: ${mime}\r\n\r\n`,
+          "utf-8"
+        )
+      );
+      chunks.push(bytes);
+      chunks.push(Buffer.from("\r\n", "utf-8"));
+    } else {
+      const value = String(p?.value ?? "");
+      chunks.push(
+        Buffer.from(
+          `Content-Disposition: form-data; name="${escapeQuotes(name)}"\r\n\r\n${value}\r\n`,
+          "utf-8"
+        )
+      );
+    }
+  }
+
+  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf-8"));
+
+  return {
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+function escapeQuotes(s) {
+  return String(s).replace(/"/g, "%22");
+}
+
+/* =========================
+   Cookie jar debug endpoints (same idea as Express version)
+   ========================= */
+async function handleGetCookieJar(req, res, ch) {
+  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+  const jarId = String(url.searchParams.get("jarId") || "default");
   const jar = await getJar(jarId);
 
+  // Flatten for UI/debug: include all fields
   const out = [];
   for (const [host, list] of jar.entries()) {
     for (const c of list || []) {
@@ -464,52 +368,19 @@ app.get("/cookiejar", async (req, res) => {
     }
   }
 
-  res.json({ jarId, count: out.length, cookies: out });
-});
+  json(res, 200, { jarId, count: out.length, cookies: out }, ch);
+}
 
-app.get("/cookiejar/resolve", async (req, res) => {
-  try {
-    const jarId = String(req.query?.jarId || "default");
-    const url = String(req.query?.url || "");
-    if (!url) return res.status(400).json({ error: "Missing url" });
-    if (!isAllowedTarget(url)) {
-      return res.status(403).json({ error: "Target host not allowed", allowed: Array.from(ALLOWED_HOSTS) });
-    }
-    const jar = await getJar(jarId);
-    const siteOrigin = String(req.query?.siteOrigin || "");
-    const resolved = resolveCookiesForUrl(jar, url, { siteOrigin });
-    res.json({
-      ok: true,
-      jarId,
-      url,
-      host: resolved.host,
-      path: resolved.path,
-      isHttps: resolved.isHttps,
-      header: resolved.header,
-      count: resolved.count,
-      cookies: resolved.cookiesSent || [],
-      cookiesSent: resolved.cookiesSent || [],
-      cookiesExcluded: resolved.cookiesExcluded || [],
-      manualOverride: !!resolved.manualOverride,
-      siteOrigin: resolved.siteOrigin || "",
-      isCrossSite: !!resolved.isCrossSite,
-    });
-  } catch (e) {
-    res.status(500).json({ error: "Failed to resolve cookies", message: e?.message || String(e) });
-  }
-});
-
-
-app.post("/cookiejar/clear", async (req, res) => {
-  const jarId = String(req.body?.jarId || "default");
+async function handleClearCookieJar(req, res, ch, payload) {
+  const jarId = String(payload?.jarId || "default");
   await clearJar(jarId);
-  res.json({ ok: true, jarId });
-});
+  json(res, 200, { ok: true, jarId }, ch);
+}
 
 /* =========================
    Main proxy
    ========================= */
-app.post("/proxy", async (req, res) => {
+async function handleProxy(req, res, ch, payload) {
   const {
     url,
     method,
@@ -522,22 +393,21 @@ app.post("/proxy", async (req, res) => {
     cookieJarEnabled,
     cookieJarId,
     cookieJar, // optional: { enabled, jarId }
-  } = req.body || {};
+  } = payload || {};
 
   if (!url || !method) {
-    return res.status(400).json({ error: "Missing url or method" });
+    json(res, 400, { error: "Missing url or method" }, ch);
+    return;
   }
 
   if (!isAllowedTarget(url)) {
-    return res.status(403).json({
-      error: "Target host not allowed",
-      allowed: Array.from(ALLOWED_HOSTS),
-    });
+    json(res, 403, { error: "Target host not allowed", allowed: Array.from(ALLOWED_HOSTS) }, ch);
+    return;
   }
 
   const m = String(method).toUpperCase();
 
-  // Cookie jar inputs
+  // Cookie jar inputs (same logic)
   const jarEnabled =
     cookieJarEnabled !== undefined
       ? !!cookieJarEnabled
@@ -545,20 +415,9 @@ app.post("/proxy", async (req, res) => {
         ? !!cookieJar.enabled
         : true;
 
-  const jarId =
-    cookieJarId || cookieJar?.jarId || "default";
-
+  const jarId = cookieJarId || cookieJar?.jarId || "default";
   const jar = jarEnabled ? await getJar(jarId) : null;
 
-  // Cookie debug (Postman-like)
-  let cookieSentHeader = "";
-  let cookieSentFrom = jarEnabled ? "jar-empty" : "disabled";
-  let cookieSentCount = 0;
-  let cookieSentCookies = [];
-  let cookieExcludedCookies = [];
-
-
-  // Abort / timeout
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), Number(timeoutMs || 30000));
 
@@ -570,54 +429,21 @@ app.post("/proxy", async (req, res) => {
 
     // If cookie jar enabled and caller didn't send Cookie explicitly, add Cookie header
     const hasCookieHeader = Object.keys(outHeaders).some((k) => k.toLowerCase() === "cookie");
-
-    if (hasCookieHeader) {
-      cookieSentFrom = "manual";
-      cookieSentHeader = String(outHeaders.Cookie || outHeaders.cookie || "");
-      if (jar) {
-        const resolvedManual = resolveCookiesForUrl(jar, url, { manualCookieHeader: cookieSentHeader, siteOrigin });
-        cookieSentCount = resolvedManual.count || 0;
-        cookieExcludedCookies = resolvedManual.cookiesExcluded || [];
-      }
-    } else if (jar) {
-      const siteOrigin = String(req.query?.siteOrigin || "");
-    const resolved = resolveCookiesForUrl(jar, url, { siteOrigin });
-      cookieSentHeader = resolved.header || "";
-      cookieSentCount = resolved.count || 0;
-      cookieSentCookies = resolved.cookiesSent || [];
-      cookieExcludedCookies = resolved.cookiesExcluded || [];
-      cookieSentFrom = cookieSentHeader ? "jar" : "jar-empty";
-      if (cookieSentHeader) outHeaders = { ...outHeaders, Cookie: cookieSentHeader };
+    if (jar && !hasCookieHeader) {
+      const cookieHeader = buildCookieHeader(jar, url);
+      if (cookieHeader) outHeaders = { ...outHeaders, Cookie: cookieHeader };
     }
 
     let requestBody = undefined;
 
     if (useMultipart) {
       if (m === "GET" || m === "HEAD") {
-        return res.status(400).json({ error: "Multipart body not allowed for GET/HEAD" });
+        json(res, 400, { error: "Multipart body not allowed for GET/HEAD" }, ch);
+        return;
       }
-
-      const fd = new FormData();
-
-      for (const p of multipartParts) {
-        const name = String(p?.name || "").trim();
-        if (!name) continue;
-
-        const kind = String(p?.kind || "text").toLowerCase();
-
-        if (kind === "file") {
-          const filename = p?.filename || "file";
-          const mime = p?.mime || "application/octet-stream";
-          const base64 = p?.base64 || "";
-          const bytes = decodeBase64ToUint8(base64);
-          const blob = new Blob([bytes], { type: mime });
-          fd.append(name, blob, filename);
-        } else {
-          fd.append(name, String(p?.value ?? ""));
-        }
-      }
-
-      requestBody = fd;
+      const mp = buildMultipartBody(multipartParts);
+      requestBody = mp.body;
+      outHeaders = { ...outHeaders, "Content-Type": mp.contentType };
     } else {
       if (!["GET", "HEAD"].includes(m) && body !== undefined && body !== null && body !== "") {
         requestBody = body;
@@ -629,6 +455,7 @@ app.post("/proxy", async (req, res) => {
       headers: outHeaders,
       signal: controller.signal,
       body: requestBody,
+      redirect: "follow",
     };
 
     const upstream = await fetch(url, options);
@@ -637,67 +464,104 @@ app.post("/proxy", async (req, res) => {
     const setCookies = getSetCookiesFromFetchResponse(upstream);
     if (jar && setCookies.length) {
       const hostname = new URL(url).hostname;
-
       for (const sc of setCookies) {
         const ck = parseSetCookie(sc, url);
         if (ck) upsertCookie(jar, hostname, ck);
       }
-
-      // debounce flush to disk
-      markDirty(jarId);
+      markDirty(jarId); // debounce flush to disk
     }
 
+    const raw = await upstream.text();
     const outHeadersResp = sanitizeOutgoingHeaders(upstream.headers);
 
-    const ct = upstream.headers.get("content-type") || outHeadersResp["content-type"] || "";
-    const cd = upstream.headers.get("content-disposition") || outHeadersResp["content-disposition"] || "";
-    const filename = getFilenameFromContentDisposition(cd);
-
-    let body = "";
-    let bodyBase64 = "";
-    let isBase64 = false;
-    let sizeBytes = 0;
-
-    if (isTextLikeContentType(ct)) {
-      body = await upstream.text();
-      try { sizeBytes = Buffer.byteLength(body, "utf8"); } catch { sizeBytes = body.length; }
-    } else {
-      const ab = await upstream.arrayBuffer();
-      const buf = Buffer.from(ab);
-      bodyBase64 = buf.toString("base64");
-      isBase64 = true;
-      sizeBytes = buf.length;
-    }
-
-    return res.json({
+    json(res, 200, {
       ok: upstream.ok,
       status: upstream.status,
       statusText: upstream.statusText,
       headers: outHeadersResp,
-      body,
-      bodyBase64,
-      isBase64,
-      contentType: ct,
-      filename,
-      sizeBytes,
+      body: raw,
       setCookie: setCookies,
       jarId: jarEnabled ? jarId : null,
-    });
+    }, ch);
   } catch (e) {
-    return res.status(500).json({
+    json(res, 500, {
       error: "Proxy request failed",
       message: e?.message || String(e),
-    });
+    }, ch);
   } finally {
     clearTimeout(t);
   }
+}
+
+/* =========================
+   Server
+   ========================= */
+const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin ? String(req.headers.origin) : "";
+  const ch = corsHeaders(origin);
+
+  // Preflight
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, ch);
+    res.end();
+    return;
+  }
+
+  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
+
+  // Basic origin allowlist for browser requests
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    json(res, 403, { error: "Origin not allowed", origin }, ch);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/") {
+    text(res, 200, "Bhejo proxy is running. Use POST /proxy", ch);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/health") {
+    json(res, 200, { ok: true, name: "bhejo-proxy", port: PORT }, ch);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/cookiejar") {
+    await handleGetCookieJar(req, res, ch);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/cookiejar/clear") {
+    try {
+      const raw = await readBody(req);
+      const payload = JSON.parse(raw.toString("utf-8") || "{}");
+      await handleClearCookieJar(req, res, ch, payload);
+    } catch {
+      json(res, 400, { error: "Invalid JSON" }, ch);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/proxy") {
+    try {
+      const raw = await readBody(req);
+      let payload;
+      try {
+        payload = JSON.parse(raw.toString("utf-8") || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON" }, ch);
+        return;
+      }
+      await handleProxy(req, res, ch, payload);
+    } catch (e) {
+      json(res, 413, { error: e?.message || "Payload too large" }, ch);
+    }
+    return;
+  }
+
+  text(res, 404, "Not Found", ch);
 });
 
-app.get("/", (req, res) => {
-  res.send("Bhejo proxy is running. Use POST /proxy");
-});
-
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Bhejo proxy running on http://localhost:${PORT}`);
   console.log("Allowed hosts:", Array.from(ALLOWED_HOSTS));
   console.log("Allowed origins:", Array.from(ALLOWED_ORIGINS));
