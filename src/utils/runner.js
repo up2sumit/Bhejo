@@ -7,7 +7,8 @@
 
 import { applyVarsToRequest } from "./vars";
 import { runAssertions } from "./assertions";
-import { applyAuthToHeaders } from "../components/AuthEditor";
+// IMPORTANT: keep utils independent of UI components
+import { applyAuthToHeaders } from "./auth";
 import { pushConsoleEvent } from "./consoleBus";
 import { runPreRequestScript } from "./scriptRuntime";
 
@@ -19,8 +20,19 @@ const AGENT_DEFAULT_BASE_URL = "http://127.0.0.1:3131";
 
 function getAgentConfig() {
   try {
-    const baseUrl = (localStorage.getItem("bhejo_agent_baseUrl") || AGENT_DEFAULT_BASE_URL).trim();
-    const token = (localStorage.getItem("bhejo_agent_token") || "").trim();
+    const rawBase = localStorage.getItem("bhejo_agent_baseUrl");
+    const rawToken = localStorage.getItem("bhejo_agent_token");
+
+    // localStorage may contain plain strings OR JSON-stringified values
+    const parsedBase = safeJsonParse(rawBase);
+    const parsedToken = safeJsonParse(rawToken);
+
+    const baseUrl = String(
+      (parsedBase ?? rawBase ?? AGENT_DEFAULT_BASE_URL) || AGENT_DEFAULT_BASE_URL
+    ).trim();
+
+    const token = String((parsedToken ?? rawToken ?? "") || "").trim();
+
     return { baseUrl: baseUrl || AGENT_DEFAULT_BASE_URL, token };
   } catch {
     return { baseUrl: AGENT_DEFAULT_BASE_URL, token: "" };
@@ -150,7 +162,11 @@ async function runViaAgent({ finalUrl, method, headersObj, bodyText, followRedir
       : { mode: "none" },
   };
 
-  const agentRes = await fetch(`${baseUrl.replace(/\/$/, "")}/send`, {
+  // Defensive: never call .replace on a non-string
+  const base = String(baseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
+  if (!base) throw new Error("Agent base URL missing. Set Agent base URL in settings.");
+
+  const agentRes = await fetch(`${base}/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-bhejo-token": token },
     signal,
@@ -379,7 +395,8 @@ export async function runBatch({ requests, envVars, onProgress, signal }) {
       // Apply {{vars}} AFTER pre-request modifications
       const finalDraft = applyVarsToRequest(draftForVars, mergedVars);
 
-      const resolvedTests = Array.isArray(finalDraft?.tests) ? finalDraft.tests : tests;
+      const structuredTests = Array.isArray(req.tests) ? req.tests : [];
+      const resolvedTests = Array.isArray(finalDraft?.tests) ? finalDraft.tests : structuredTests;
 
       const finalUrl = buildFinalUrl(finalDraft.url, finalDraft.params);
 

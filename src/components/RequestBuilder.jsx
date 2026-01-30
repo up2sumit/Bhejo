@@ -1328,7 +1328,8 @@ const pairAgent = async () => {
           throw new Error("Agent mode does not support multipart form-data yet. Use Proxy mode for this request.");
         }
 
-        const base = (agentBaseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
+        const base = String(agentBaseUrl || AGENT_DEFAULT_BASE_URL || "").trim().replace(/\/$/, "");
+        if (!base) throw new Error("Agent base URL missing. Set Agent base URL in settings.");
         const tok = String(agentToken || "").trim();
         if (!tok) throw new Error("Agent token missing. Pair the agent first.");
 

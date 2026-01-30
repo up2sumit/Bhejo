@@ -18,8 +18,28 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
 
   const canCall = useMemo(() => !!baseUrl && !!token, [baseUrl, token]);
 
+  // ✅ Restore saved baseUrl/token (if parent didn't pass them)
+  useEffect(() => {
+    const b = safeJsonParse(localStorage.getItem(LS_BASE), null);
+    const t = safeJsonParse(localStorage.getItem(LS_TOKEN), null);
+
+    if (!baseUrl && b) onBaseUrl?.(b);
+    if (!token && t) onToken?.(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ✅ Persist for convenience across refresh
+  useEffect(() => {
+    if (baseUrl) localStorage.setItem(LS_BASE, JSON.stringify(baseUrl));
+  }, [baseUrl]);
+
+  useEffect(() => {
+    if (token) localStorage.setItem(LS_TOKEN, JSON.stringify(token));
+  }, [token]);
+
   async function api(path, opts = {}) {
     const url = String(baseUrl || "").replace(/\/$/, "") + path;
+
     const res = await fetch(url, {
       ...opts,
       headers: {
@@ -28,9 +48,23 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
         "x-bhejo-token": token
       }
     });
-    const data = await res.json().catch(() => ({}));
+
+    // Some infra returns non-JSON on errors; be resilient.
+    const raw = await res.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { raw };
+    }
+
     if (!res.ok || data?.ok === false) {
-      throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+      const m =
+        data?.error ||
+        data?.message ||
+        (typeof data?.raw === "string" ? data.raw.slice(0, 240) : "") ||
+        `HTTP ${res.status}`;
+      throw new Error(m);
     }
     return data;
   }
@@ -55,7 +89,10 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
     setBusy(true);
     setMsg("");
     try {
-      const data = await api("/config", { method: "POST", body: JSON.stringify({ config: cfg }) });
+      const data = await api("/config", {
+        method: "POST",
+        body: JSON.stringify({ config: cfg })
+      });
       setCfg(data.config || cfg);
       setMsg("Saved agent config.");
     } catch (e) {
@@ -66,7 +103,6 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
   }
 
   useEffect(() => {
-    // auto-load once when token exists
     if (canCall && !cfg) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canCall]);
@@ -80,7 +116,11 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
             {busy ? "Loading..." : "Load"}
           </button>
         </div>
-        {msg ? <div className="muted" style={{ marginTop: 8 }}>{msg}</div> : null}
+        {msg ? (
+          <div className="muted" style={{ marginTop: 8 }}>
+            {msg}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -105,7 +145,11 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
         </div>
       </div>
 
-      {msg ? <div className="muted" style={{ marginTop: 8 }}>{msg}</div> : null}
+      {msg ? (
+        <div className="muted" style={{ marginTop: 8 }}>
+          {msg}
+        </div>
+      ) : null}
 
       <div className="agentGrid">
         <label className="agentLbl">
@@ -116,9 +160,14 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
             onChange={(e) => setCfg((p) => ({ ...p, proxyMode: e.target.value }))}
           >
             <option value="off">Off</option>
-            <option value="env">Use env (HTTP_PROXY/HTTPS_PROXY/NO_PROXY)</option>
+            <option value="env">Env (HTTP_PROXY / HTTPS_PROXY / NO_PROXY)</option>
+            <option value="system">System (uses env in Node)</option>
             <option value="custom">Custom proxy</option>
           </select>
+          <div className="muted" style={{ marginTop: 6 }}>
+            If Postman works but Bhejo gets blocked (444), it’s often because Postman is using your corporate proxy.
+            Choose <b>Env</b> or <b>Custom</b> and retry.
+          </div>
         </label>
 
         <label className="agentLbl">
@@ -137,6 +186,9 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
             }
             placeholder="localhost,127.0.0.1,.corp.local"
           />
+          <div className="muted" style={{ marginTop: 6 }}>
+            Use this to bypass proxy for internal domains if required. Example: <code>.corp.local</code>
+          </div>
         </label>
 
         <div className="agentLbl">
@@ -146,7 +198,9 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
               <input
                 type="checkbox"
                 checked={proxyFor.http !== false}
-                onChange={(e) => setCfg((p) => ({ ...p, proxyFor: { ...(p.proxyFor || {}), http: e.target.checked } }))}
+                onChange={(e) =>
+                  setCfg((p) => ({ ...p, proxyFor: { ...(p.proxyFor || {}), http: e.target.checked } }))
+                }
               />
               HTTP
             </label>
@@ -161,7 +215,35 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
               HTTPS
             </label>
           </div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Keep HTTPS enabled for most corporate proxies.
+          </div>
         </div>
+
+        {proxyMode === "env" || proxyMode === "system" ? (
+          <div className="agentLbl" style={{ gridColumn: "1 / -1" }}>
+            Proxy env variables (set on Agent machine before starting Agent)
+            <div className="muted" style={{ marginTop: 6 }}>
+              Windows PowerShell:
+              <pre style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>
+$env:HTTPS_PROXY="http://proxy.corp.local:8080"
+$env:HTTP_PROXY="http://proxy.corp.local:8080"
+$env:NO_PROXY="localhost,127.0.0.1,.corp.local"
+npm run dev
+              </pre>
+              Mac/Linux:
+              <pre style={{ whiteSpace: "pre-wrap", marginTop: 6 }}>
+HTTPS_PROXY=http://proxy.corp.local:8080 \
+HTTP_PROXY=http://proxy.corp.local:8080 \
+NO_PROXY=localhost,127.0.0.1,.corp.local \
+npm run dev
+              </pre>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Note: Node does not automatically understand PAC scripts. If your org uses PAC, ask IT for the resolved proxy host:port and use Custom mode.
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {proxyMode === "custom" ? (
           <div className="agentCustomBox">
@@ -265,12 +347,36 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
             <input
               type="checkbox"
               checked={tls.rejectUnauthorized !== false}
-              onChange={(e) => setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), rejectUnauthorized: e.target.checked } }))}
+              onChange={(e) =>
+                setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), rejectUnauthorized: e.target.checked } }))
+              }
             />
             Reject unauthorized certificates
           </label>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn btnSm"
+              disabled={busy}
+              onClick={() => setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), rejectUnauthorized: false } }))}
+              title="Quick test only (NOT recommended for production)"
+            >
+              Quick test: OFF
+            </button>
+            <button
+              type="button"
+              className="btn btnSm"
+              disabled={busy}
+              onClick={() => setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), rejectUnauthorized: true } }))}
+              title="Recommended when CA PEM is set"
+            >
+              Recommended: ON
+            </button>
+          </div>
+
           <div className="muted" style={{ marginTop: 6 }}>
-            Turn OFF only for dev. In enterprises, keep ON and set CA PEM.
+            Turn OFF only to test. In enterprises, keep ON and set CA PEM / CA path.
           </div>
         </div>
 
@@ -283,9 +389,16 @@ export default function AgentConfigPanel({ baseUrl, token, onBaseUrl, onToken })
             onChange={(e) => setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), caPem: e.target.value } }))}
             placeholder="-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
           />
-          <div className="muted" style={{ marginTop: 6 }}>
-            If your org uses TLS interception (Zscaler/Bluecoat), paste the org root CA here.
-          </div>
+        </label>
+
+        <label className="agentLbl" style={{ gridColumn: "1 / -1" }}>
+          CA PEM Path (optional, local file path on the agent machine)
+          <input
+            className="input"
+            value={tls.caPemPath || ""}
+            onChange={(e) => setCfg((p) => ({ ...p, tls: { ...(p.tls || {}), caPemPath: e.target.value } }))}
+            placeholder="C:\\certs\\corp-root.pem  or  /etc/ssl/certs/corp-root.pem"
+          />
         </label>
       </div>
     </div>
