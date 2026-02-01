@@ -7,7 +7,6 @@
 
 import { applyVarsToRequest } from "./vars";
 import { runAssertions } from "./assertions";
-// IMPORTANT: keep utils independent of UI components
 import { applyAuthToHeaders } from "./auth";
 import { pushConsoleEvent } from "./consoleBus";
 import { runPreRequestScript } from "./scriptRuntime";
@@ -145,7 +144,7 @@ async function runViaProxy({ finalUrl, method, headersObj, bodyText, followRedir
 async function runViaAgent({ finalUrl, method, headersObj, bodyText, followRedirects, maxRedirects, signal }) {
   const { baseUrl, token } = getAgentConfig();
   if (!token) throw new Error("Agent token missing. Pair the agent from UI first.");
-
+  if (!baseUrl) throw new Error("Agent base URL missing. Set it in Settings > Agent.");
   const headersArr = Object.entries(headersObj || {}).map(([key, value]) => ({ key, value }));
   const payload = {
     method,
@@ -162,11 +161,22 @@ async function runViaAgent({ finalUrl, method, headersObj, bodyText, followRedir
       : { mode: "none" },
   };
 
-  // Defensive: never call .replace on a non-string
-  const base = String(baseUrl || AGENT_DEFAULT_BASE_URL).trim().replace(/\/$/, "");
-  if (!base) throw new Error("Agent base URL missing. Set Agent base URL in settings.");
+  // --- Agent debug ---
+  const base = String(baseUrl || AGENT_DEFAULT_BASE_URL).trim();
+  const baseNorm = base.replace(/\/$/, "");
+  // eslint-disable-next-line no-console
+  console.log("[Bhejo][Agent] runViaAgent()", {
+    baseUrlRaw: baseUrl,
+    baseUrlNorm: baseNorm,
+    hasToken: !!token,
+    method,
+    finalUrl,
+  });
+  if (!baseNorm) {
+    throw new Error("Agent base URL missing. Set it in Settings > Agent and try again.");
+  }
 
-  const agentRes = await fetch(`${base}/send`, {
+  const agentRes = await fetch(`${baseNorm}/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-bhejo-token": token },
     signal,
