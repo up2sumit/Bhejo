@@ -486,31 +486,20 @@ const loadRequestToEditor = (node) => {
   const tree = trees.find((t) => t.id === activeCollectionId) || null;
   const pathNodes = tree ? buildNodePath(tree, node.id) : [];
   const segs = [];
-  const metaSegs = [];
-  if (tree?.name) {
-    segs.push(tree.name);
-    metaSegs.push({ type: "collection", label: tree.name, collectionId: tree.id });
-  }
-  // buildNodePath already excludes root; includes folders + request
-  for (const n of pathNodes) {
-    if (n?.name) {
-      segs.push(n.name);
-      metaSegs.push({
-        type: n.type,
-        label: n.name,
-        collectionId: tree?.id || activeCollectionId,
-        nodeId: n.id,
-      });
-    }
+  if (tree?.name) segs.push(tree.name);
+  // pathNodes includes root -> ... -> request; drop root
+  for (const n of pathNodes.slice(1)) {
+    if (n?.name) segs.push(n.name);
   }
 
   const payload = {
     ...(node.request || {}),
+    id: node.id,
     // Ensure the editor shows the tree name (source of truth) and Save syncs back correctly
     name: node.name || (node.request || {}).name || "Request",
     __origin: { kind: "tree", collectionId: activeCollectionId, nodeId: node.id },
     // Breadcrumb/path for UI (Favorites + Request header)
-    __path: { collectionId: activeCollectionId, segments: segs, meta: metaSegs, breadcrumb: segs.join(" / ") },
+    __path: { collectionId: activeCollectionId, segments: segs, breadcrumb: segs.join(" / ") },
   };
 
   onLoadRequest?.(payload);
@@ -521,57 +510,6 @@ const loadRequestToEditor = (node) => {
   const [selected, setSelected] = useState(null); // { collectionId, nodeId, type }
 const [search, setSearch] = useState("");
   const [safeReorderOnly, setSafeReorderOnly] = useState(true);
-
-  // Allow Request breadcrumb to navigate back to collection/folder (Postman-like).
-  // RequestBuilder dispatches: window.dispatchEvent(new CustomEvent("bhejo:navigate", { detail: { collectionId, nodeId } }))
-  useEffect(() => {
-    const handler = (e) => {
-      const d = e?.detail || {};
-      if (!d.collectionId) return;
-      const targetCollectionId = d.collectionId;
-      const targetNodeId = d.nodeId || null;
-
-      // Switch collection if needed
-      setActiveCollectionId(targetCollectionId);
-
-      // Defer expansion/selection until trees are ready in this render cycle
-      requestAnimationFrame(() => {
-        const tree = trees.find((t) => t.id === targetCollectionId);
-        if (!tree) return;
-
-        if (!targetNodeId) {
-          // Just focus the collection root
-          setSelected({ collectionId: targetCollectionId, nodeId: "root", type: "folder" });
-          setExpanded((prev) => {
-            const next = new Set(prev);
-            next.add("root");
-            return next;
-          });
-          return;
-        }
-
-        const path = buildNodePath(tree, targetNodeId); // root -> ... -> target
-        if (!path || path.length === 0) return;
-
-        // Expand all folders on the way (including root + target if it's a folder)
-        setExpanded((prev) => {
-          const next = new Set(prev);
-          for (const n of path) {
-            if (n?.type === "folder" || n?.id === "root") next.add(n.id);
-          }
-          return next;
-        });
-
-        const target = path[path.length - 1];
-        setSelected({ collectionId: targetCollectionId, nodeId: target.id, type: target.type });
-      });
-    };
-
-    window.addEventListener("bhejo:navigate", handler);
-    return () => window.removeEventListener("bhejo:navigate", handler);
-  }, [trees]);
-
-
   const VISIBLE_KEY = "bhejo.visibleCollections.v1";
   const [showVisibleMenu, setShowVisibleMenu] = useState(false);
   const visibleRef = useRef(null);
